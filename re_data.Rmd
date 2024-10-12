@@ -1,0 +1,419 @@
+---
+title: "re_data"
+output: html_document
+date: "2023-06-05"
+---
+
+```{r}
+library(readxl)
+library(dplyr)
+library(lubridate)
+```
+
+```{r}
+# This file is used for pre process the solar data
+# Load data -- solar
+ScenarioList <- c(1, 2, 3, 4, 5, 6)
+
+BlankDB <- NULL
+
+for (Scenario in ScenarioList) {
+  sheet.name <- paste('PV Sc ', Scenario, sep = '')
+  Solar_Potential <- read_excel("Updated Results II.xlsx", sheet = sheet.name)
+  Solar_Potential$Scenario <- Scenario
+  BlankDB <- rbind(BlankDB, Solar_Potential)
+  rm(sheet.name)
+}
+
+Solar_Potential <-
+  BlankDB %>%
+  dplyr::select(9, 2:4, 7)
+
+rm(BlankDB)
+
+colnames(Solar_Potential) <- c("scenario","province","lon","lat","valid_area")
+
+selected_area <- Solar_Potential[Solar_Potential$scenario == 6,]
+rm(Solar_Potential)
+
+selected_area <- selected_area[,c(2,3,4)]
+
+POA_all <- NULL
+```
+
+```{r}
+for(i in 2001:2018){
+  dataname <- paste0("POA.adj.",i,".v2.RData")
+  load(dataname)
+  solar <- POA[ , c(2,3,1,4,9)]
+  rm(POA)
+  
+  solar <- solar[!duplicated(solar), ]
+  
+  select_solar <- inner_join(solar, selected_area, by=c("lon","lat"))
+  rm(solar)
+  
+  select_solar$cf = select_solar$POA.tl* (1 - 0.1408)/1000
+  select_solar$datetime=paste(select_solar$date,select_solar$hour,sep=" ")
+  select_solar$date_time <- as.POSIXct(select_solar$datetime, format = "%Y%m%d %H", tz = "GMT")
+  attr(select_solar$date_time, "tzone") <- "Asia/Shanghai"
+
+  select_solar <- select_solar[,c(9,1,2,6,7)]
+  
+  select_solar$date <- format(select_solar$date_time,"%Y-%m-%d")
+  select_solar$StartHour <- format(select_solar$date_time,"%H")
+ 
+  POA_all <- rbind(POA_all,select_solar)
+  
+  rm(select_solar)
+}
+
+```
+
+
+```{r}
+POA_all$cf[POA_all$cf>1] <- 1
+
+site_test <- POA_all %>%
+  group_by(lon,lat,province) %>%
+  summarise(s=n(),.groups = "drop")
+```
+
+```{r}
+solar_site <- NULL
+for(i in 1:nrow(selected_area)){
+  lo = selected_area$lon[i]
+  la = selected_area$lat[i]
+  pro = selected_area$province[i]
+  site_data <- subset(POA_all,lon==lo & lat==la & province==pro)
+  
+  print(i)
+  #print((nrow(site_data)-len)) # nrow(site_data) supposed to be 166560(equal to length of date time)
+  
+  #calculate cf in coming three hours
+  v_lag0 <- site_data$cf[1:(len-2)]
+  v_lag1 <- site_data$cf[2:(len-1)]
+  v_lag2 <- site_data$cf[3:len]
+  site_data$cf_3hour <- 0
+  site_data$cf_3hour[1:(len-2)] <- v_lag0 + v_lag1 + v_lag2
+  
+  #calculate cf in coming six hours
+  v_lag0 <- site_data$cf[1:(len-5)]
+  v_lag1 <- site_data$cf[2:(len-4)]
+  v_lag2 <- site_data$cf[3:(len-3)]
+  v_lag3 <- site_data$cf[4:(len-2)]
+  v_lag4 <- site_data$cf[5:(len-1)]
+  v_lag5 <- site_data$cf[6:(len)]
+  
+  site_data$cf_6hour <- 0
+  site_data$cf_6hour[1:(len-5)] <- v_lag0 + v_lag1 + v_lag2 +
+     v_lag3 + v_lag4 + v_lag5
+  
+  #delete hours in 2019-01-01(incomplete)
+  site_data <- site_data[c(1:166552),]
+  
+  solar_site <- rbind(solar_site,site_data)
+}
+save(solar_site,file="solar_site_June.RData")
+
+```
+
+
+```{r}
+load("solar_site_June.RData")
+season_cal <- function(m){
+  if(m %in% c(3,4,5)){
+    return("Spring")
+  }
+  if(m %in% c(6,7,8)){
+    return("Summer")
+  }
+  if(m %in% c(9,10,11)){
+    return("Fall")
+  }
+  if(m %in% c(12,1,2)){
+    return("Winter")
+  }
+}
+
+one_site <- solar_site[c(1:166552),]
+one_site$mon <- month(one_site$date_time)
+one_site$season <- sapply(one_site$mon,season_cal)
+sea_one_site <- one_site$season
+sea <- rep(sea_one_site,1666)
+solar_site$season <- sea
+
+rm(one_site)
+rm(sea)
+rm(sea_one_site)
+
+# mean cf of each site in different season/time period
+# 24 * 4 * 773
+mean_site <- solar_site %>%
+  group_by(lon,lat,province,season,StartHour) %>%
+  summarise(mean_3hour = mean(cf_3hour), mean_6hour = mean(cf_6hour), .groups="drop")
+
+solar_site <- left_join(solar_site,mean_site,by=c("lon","lat","province",
+                                                "season","StartHour"))
+solar_site$cf_dis3 <- solar_site$cf_3hour - solar_site$mean_3hour
+solar_site$cf_dis6 <- solar_site$cf_6hour - solar_site$mean_6hour
+```
+
+
+```{r}
+solar_blue_q = unname(quantile(solar_site$cf_dis3, probs = 0.0333))
+solar_oran_q = unname(quantile(solar_site$cf_dis3, probs = 0.0167))
+solar_red_q  = unname(quantile(solar_site$cf_dis6, probs = 0.00167))
+
+solar_site$blue_period <- ifelse(solar_site$cf_dis3 < solar_blue_q, 1, 0)
+solar_site$oran_period <- ifelse(solar_site$cf_dis3 < solar_oran_q, 1, 0)
+solar_site$red_period <- ifelse(solar_site$cf_dis6 < solar_red_q, 1, 0)
+save(solar_site,file="solar_site_June.RData")
+```
+
+```{r}
+load("solar_site_June.RData")
+extreme_period <- solar_site[,c(1,2,3,4,6,7,10,15,16,17)]
+rm(solar_site)
+
+df = data.frame(StartHour = c(0:23,0:23,0:23), 
+                Hour = c(0:23,1:23,0,2:23,0,1)) 
+
+extreme_period$StartHour <- as.numeric(extreme_period$StartHour)
+extreme_time <- left_join(extreme_period, df, by="StartHour")
+rm(extreme_period)
+
+df$adj_tag <- 0
+df$adj_tag[48] <- 1
+df$adj_tag[71] <- 1
+df$adj_tag[72] <- 1
+
+one_site <- extreme_time[c(1:(166552*3)),]
+one_site <- left_join(one_site, df, by=c("StartHour","Hour"))
+one_site$adj_date <- as.Date(one_site$date) + one_site$adj_tag
+extreme_time$adj_date <- rep(one_site$adj_date,1666)
+
+extreme_hour <- extreme_time %>%
+  group_by(lon,lat,province,adj_date,Hour) %>%
+  summarise(blue=sum(blue_period),oran=sum(oran_period),.groups="drop")
+
+rm(extreme_time)
+
+extreme_hour$blue[extreme_hour$blue>1] <- 1
+extreme_hour$oran[extreme_hour$oran>1] <- 1
+
+solar_extreme_3 <- extreme_hour
+rm(extreme_hour)
+save(solar_extreme_3,file="solar_extreme_3.RData")
+```
+
+```{r}
+#cal red extreme(six hours)
+load("solar_site_June.RData")
+df = data.frame(StartHour = c(0:23,0:23,0:23,0:23,0:23,0:23),
+                Hour = c(0:23,1:23,0,2:23,0,1,3:23,0,1,2,4:23,0:3,5:23,0:4))
+
+extreme_period <- solar_site[,c(1,2,3,4,6,7,10,17)]
+rm(solar_site)
+
+extreme_period$StartHour <- as.numeric(extreme_period$StartHour)
+extreme_time <- left_join(extreme_period, df, by="StartHour")
+
+#adjust date of hours across two days
+df$adj_tag <- 0
+df$adj_tag[c(48,71,72,94,95,96,117:120,140:144)] <- 1
+
+one_site <- extreme_time[c(1:(166552*6)),]
+one_site <- left_join(one_site, df, by=c("StartHour","Hour"))
+one_site$adj_date <- as.Date(one_site$date) + one_site$adj_tag
+extreme_time$adj_date <- rep(one_site$adj_date,1666)
+
+rm(extreme_period)
+rm(one_site)
+
+
+extreme_hour_red <- extreme_time %>%
+  group_by(lon,lat,province,adj_date,Hour) %>%
+  summarise(red = sum(red_period), .groups="drop")
+
+rm(extreme_time)
+
+extreme_hour_red$red[extreme_hour_red$red>1] <- 1
+solar_extreme_6 <- extreme_hour_red
+rm(extreme_hour_red)
+save(solar_extreme_6, file = "solar_extrem_6.RData")
+```
+
+```{r}
+#combine blue orange red alert data frame
+load("solar_extrem_6.RData")
+load("solar_extreme_3.RData")
+
+#delete hours in 2019
+solar_extreme_6$year <- year(solar_extreme_6$adj_date)
+solar_extreme_3$year <- year(solar_extreme_3$adj_date)
+solar_extreme_6 <- solar_extreme_6[!(solar_extreme_6$year == 2019), ]
+solar_extreme_3 <- solar_extreme_3[!(solar_extreme_3$year == 2019), ]
+
+#combine
+solar_extreme_3$red <- solar_extreme_6$red
+solar_extreme <- solar_extreme_3
+rm(solar_extreme_3)
+save(solar_extreme,file="solar_extreme.RData")
+
+```
+
+
+
+
+```{r}
+# wind + solar
+load("wind_site_June.RData") 
+load("solar_site_June.RData")
+
+
+wind_province <-wind_site %>%
+  group_by(province,date,StartHour) %>%
+  summarise(cf_3hour_wind = mean(cf_3hour), cf_6hour_wind = mean(cf_6hour), .groups="drop")
+
+solar_province <-solar_site %>%
+  group_by(province,date,StartHour) %>%
+  summarise(cf_3hour_solar = mean(cf_3hour), cf_6hour_solar = mean(cf_6hour), .groups="drop")
+
+
+sowin_province <- inner_join(wind_province, solar_province, by=c("province","date","StartHour"))
+sowin_province$sw_cf3hour <- sowin_province$cf_3hour_wind + sowin_province$cf_3hour_solar
+sowin_province$sw_cf6hour <- sowin_province$cf_6hour_wind + sowin_province$cf_6hour_solar
+
+#calculate mean of every 3 or 6 hours of different province and different season
+season_cal <- function(m){
+  if(m %in% c(3,4,5)){
+    return("Spring")
+  }
+  if(m %in% c(6,7,8)){
+    return("Summer")
+  }
+  if(m %in% c(9,10,11)){
+    return("Fall")
+  }
+  if(m %in% c(12,1,2)){
+    return("Winter")
+  }
+}
+
+one_province <- sowin_province[c(1:166552),]
+one_province$mon <- month(one_province$date)
+one_province$season <- sapply(one_province$mon,season_cal)
+sea_one_prov <- one_province$season
+sea <- rep(sea_one_prov,24)
+sowin_province$season <- sea
+
+rm(one_province)
+
+sowin_mean <- sowin_province %>%
+  group_by(province,season,StartHour) %>%
+  summarise(mean_sw3=mean(sw_cf3hour), mean_sw6=mean(sw_cf6hour), .groups="drop")
+
+sowin_province <- left_join(sowin_province,sowin_mean,
+                            by=c("province","StartHour","season"))
+sowin_province$sw3_dis <- sowin_province$sw_cf3hour - sowin_province$mean_sw3
+sowin_province$sw6_dis <- sowin_province$sw_cf6hour - sowin_province$mean_sw6
+
+sowin_blue_q = unname(quantile(sowin_province$sw3_dis, probs = 0.0333))
+sowin_oran_q = unname(quantile(sowin_province$sw3_dis, probs = 0.0167))
+sowin_red_q  = unname(quantile(sowin_province$sw6_dis, probs = 0.00167))
+
+sowin_province$blue_period <- ifelse(sowin_province$sw3_dis < sowin_blue_q, 1, 0)
+sowin_province$oran_period <- ifelse(sowin_province$sw3_dis < sowin_oran_q, 1, 0)
+sowin_province$red_period <- ifelse(sowin_province$sw6_dis < sowin_red_q, 1, 0)
+
+save(sowin_province,file="sowin_province.RData")
+```
+
+```{r}
+load("sowin_province.RData")
+
+sowin_period <- sowin_province[,c(1,2,3,8,9,10,15,16,17)]
+rm(sowin_province)
+
+df = data.frame(StartHour = c(0:23,0:23,0:23), 
+                Hour = c(0:23,1:23,0,2:23,0,1)) 
+
+sowin_period$StartHour <- as.numeric(sowin_period$StartHour)
+sowin_time <- left_join(sowin_period, df, by="StartHour")
+rm(sowin_period)
+
+df$adj_tag <- 0
+df$adj_tag[48] <- 1
+df$adj_tag[71] <- 1
+df$adj_tag[72] <- 1
+
+one_site <- sowin_time[c(1:(166552*3)),]
+one_site <- left_join(one_site, df, by=c("StartHour","Hour"))
+one_site$adj_date <- as.Date(one_site$date) + one_site$adj_tag
+sowin_time$adj_date <- rep(one_site$adj_date,24)
+
+sowin_hour <- sowin_time %>%
+  group_by(province,adj_date,Hour) %>%
+  summarise(blue=sum(blue_period),oran=sum(oran_period),.groups="drop")
+
+rm(sowin_time)
+
+sowin_hour$blue[sowin_hour$blue>1] <- 1
+sowin_hour$oran[sowin_hour$oran>1] <- 1
+
+sowin_3 <- sowin_hour
+rm(sowin_hour)
+#save(sowin_3,file="solar_extreme_3.RData")
+```
+
+
+```{r}
+load("sowin_province.RData")
+df = data.frame(StartHour = c(0:23,0:23,0:23,0:23,0:23,0:23),
+                Hour = c(0:23,1:23,0,2:23,0,1,3:23,0,1,2,4:23,0:3,5:23,0:4))
+
+sowin_period <- sowin_province[,c(1,2,3,8,9,10,17)]
+rm(sowin_province)
+
+sowin_period$StartHour <- as.numeric(sowin_period$StartHour)
+sowin_time <- left_join(sowin_period, df, by="StartHour")
+
+#adjust date of hours across two days
+df$adj_tag <- 0
+df$adj_tag[c(48,71,72,94,95,96,117:120,140:144)] <- 1
+
+one_site <- sowin_time[c(1:(166552*6)),]
+one_site <- left_join(one_site, df, by=c("StartHour","Hour"))
+one_site$adj_date <- as.Date(one_site$date) + one_site$adj_tag
+sowin_time$adj_date <- rep(one_site$adj_date,24)
+
+rm(sowin_period)
+rm(one_site)
+
+
+sowin_hour_red <- sowin_time %>%
+  group_by(province,adj_date,Hour) %>%
+  summarise(red = sum(red_period), .groups="drop")
+
+rm(sowin_time)
+
+sowin_hour_red$red[sowin_hour_red$red>1] <- 1
+sowin_6 <-sowin_hour_red
+rm(sowin_hour_red)
+#save(solar_extreme_6, file = "solar_extrem_6.RData")
+```
+
+
+```{r}
+sowin_3$year <- year(sowin_3$adj_date)
+sowin_6$year <- year(sowin_6$adj_date)
+
+sowin_6 <- sowin_6[!(sowin_6$year == 2019), ]
+sowin_3 <- sowin_3[!(sowin_3$year == 2019), ]
+
+sowin_3$red <- sowin_6$red
+sowin <- sowin_3
+
+save(sowin,file = "sowin.RData")
+```

@@ -1,0 +1,114 @@
+---
+title: "conet_jaccard_cal"
+author: "Qingyuan"
+date: "2023-07-27"
+output: html_document
+---
+
+```{r}
+# This file is used for calculate the Jaccard distance of edges in co-network, then use Gephi for visulization
+library(vegan)
+library(proxy)
+for(df_name in c("site_solar_blue","site_solar_oran","site_solar_red",
+                 "site_wind_blue","site_wind_oran","site_wind_red")){
+  load(paste0(df_name,".RData"))
+}
+```
+
+```{r}
+site_wind_blue <- site_wind_blue[,colSums(site_wind_blue != 0) > 0]
+site_wind_oran <- site_wind_oran[,colSums(site_wind_oran != 0) > 0]
+site_wind_red <- site_wind_red[,colSums(site_wind_red != 0) > 0]
+
+site_solar_blue <- site_solar_blue[,colSums(site_solar_blue != 0) > 0]
+site_solar_oran <- site_solar_oran[,colSums(site_solar_oran != 0) > 0]
+site_solar_red <- site_solar_red[,colSums(site_solar_red != 0) > 0]
+```
+
+```{r}
+#dist_jac_wind_blue <- dist(as.matrix(t(site_wind_blue)),method = "Jaccard")
+dist_jac_wind_oran <- dist(as.matrix(t(site_wind_oran)),method = "Jaccard")
+dist_jac_wind_red <- dist(as.matrix(t(site_wind_red)),method = "Jaccard")
+dist_jac_solar_blue <- dist(as.matrix(t(site_solar_blue)),method = "Jaccard")
+dist_jac_solar_oran <- dist(as.matrix(t(site_solar_oran)),method = "Jaccard")
+dist_jac_solar_red <- dist(as.matrix(t(site_solar_red)),method = "Jaccard")
+```
+
+```{r}
+#mat_jac_wind_blue <- as.matrix(dist_jac_wind_blue)
+mat_jac_wind_oran <- as.matrix(dist_jac_wind_oran)
+mat_jac_wind_red <- as.matrix(dist_jac_wind_red)
+
+mat_jac_solar_blue <- as.matrix(dist_jac_solar_blue)
+mat_jac_solar_oran <- as.matrix(dist_jac_solar_oran)
+mat_jac_solar_red <- as.matrix(dist_jac_solar_red)
+```
+
+
+```{r}
+# turn jaccard distance matrix to edges data
+# The edges data will be used for visualization in Gephi.
+for(df in c("solar_blue","solar_oran","solar_red",
+            "wind_oran","wind_red")){
+  site_data_name <- paste0("site_",df)
+  site_num <- ncol(get(site_data_name))
+  nrow_num = site_num * (site_num-1) / 2
+  #print(nrow_num)
+  edges_data <- data.frame(matrix(nrow = nrow_num,ncol = 3))
+  colnames(edges_data) <- c("source","target","weight")
+  
+  indices <- t(combn(site_num, 2))
+  edges_data$source <- indices[,1]
+  edges_data$target <- indices[,2]
+  mat_jac <- get(paste0("mat_jac_",df))
+  edges_data$weight <- t(mat_jac)[lower.tri(mat_jac)]
+  
+  edges_data <- subset(edges_data, is.na(weight) == FALSE)
+  edges_data$weight <- 1 - edges_data$weight
+  
+  #edges_data <- subset(edges_data, weight>0)
+  edges_data_name <- paste0("edges_",df)
+  assign(edges_data_name,edges_data)
+  
+  
+  # create a data set for vertices information
+  vertices_data <- data.frame(matrix(nrow = site_num, ncol = 4))
+  colnames(vertices_data) <- c("ID","Province","lon","lat")
+  site_data <- colnames(get(paste0("mat_jac_",df)))
+  for(i in 1:site_num){
+    sp <- strsplit(site_data[i],split = " ")
+    vertices_data$ID[i] <- i
+    vertices_data$Province[i] <- sp[[1]][1]
+    vertices_data$lon[i] <- sp[[1]][2]
+    vertices_data$lat[i] <- sp[[1]][3]
+  }
+  vertices_data_name <- paste0("vertices_",df)
+  assign(vertices_data_name, vertices_data)
+}
+
+for(df in c("solar_blue","solar_oran","solar_red",
+            "wind_oran","wind_red")){
+  write.csv(get(paste0("vertices_",df)),file = paste0("vertices_",df,".csv"))
+  write.csv(get(paste0("edges_",df)),file = paste0("edges_",df,".csv"))
+}
+```
+
+
+```{r}
+for(df in c(
+            #"solar_blue",
+            #"solar_oran",
+            #"solar_red",
+            "wind_blue",
+            "wind_oran",
+            "wind_red"
+            )){
+  csv_data <- read.csv(paste0("original//edges_",df,".csv"))
+  csv_data <- subset(csv_data, weight > 0.4)
+  assign(paste0(df,"_csv"),csv_data)
+  
+  write.csv(csv_data,file = paste0("edges_",df,"_04.csv"),row.names = FALSE)
+}
+
+
+```

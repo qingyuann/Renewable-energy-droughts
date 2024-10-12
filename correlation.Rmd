@@ -1,0 +1,618 @@
+---
+title: "correlation"
+author: "Qingyuan"
+date: "2023-06-26"
+output: html_document
+---
+```{r}
+library(readxl)
+library(xlsx)
+library(dplyr)
+library(zoo)
+library(factoextra)
+library(cluster)
+library(corrplot)
+library(plotly)
+library(lubridate)
+library(tidyr)
+```
+
+
+```{r}
+load("solar_site_June.RData")
+load("wind_site_June.RData")
+```
+
+```{r}
+dfs <- data.frame(matrix(nrow = 277475632*2, ncol = 2)) 
+colnames(dfs) <- c("name","value")
+dfs$name[1:277475632] <- "cf_3hour_dis"
+dfs$name[277475633:(277475632*2)] <- "cf_6hour_dis"
+
+dfs$value[1:277475632] <- solar_site$cf_dis3
+dfs$value[277475633:(277475632*2)] <- solar_site$cf_dis6
+
+# distribution of cf_dis
+ggplot(dfs, aes(x=as.factor(name), y = value, fill=name)) +
+  geom_violin(draw_quantiles = c(0.1,0.15))
+ggsave(file = "solar_dis.png",width = 3000, height = 3000, units = "px", bg = "white")
+```
+
+
+```{r}
+dfw <- data.frame(matrix(nrow = 128744696*2, ncol = 2)) 
+colnames(dfw) <- c("name","value")
+dfw$name[1:128744696] <- "cf_3hour_dis"
+dfw$name[128744697:(128744696*2)] <- "cf_6hour_dis"
+
+dfw$value[1:128744696] <- wind_site$cf_dis3
+dfw$value[128744697:(128744696*2)] <- wind_site$cf_dis6
+
+# distribution of cf_dis
+ggplot(dfw, aes(x=as.factor(name), y = value, file=name)) +
+  geom_violin(draw_quantiles = c(0.1,0.15))
+ggsave(file = "wind_dis.png",width = 3000, height = 3000, units = "px", bg = "white")
+```
+
+
+```{r}
+load("wind_extreme.RData")
+load("solar_extreme.RData")
+```
+
+```{r}
+# 128744696 equal to 773 site * 166552 hour
+wblue <- sum(wind_extreme$blue) / 128744696
+woran <- sum(wind_extreme$oran) / 128744696
+wred <- sum(wind_extreme$red) / 128744696
+
+# 277475632 equal to 1666 site * 166552 hour
+sblue <- sum(solar_extreme$blue) / 277475632
+soran <- sum(solar_extreme$oran) / 277475632
+sred <- sum(solar_extreme$red) / 277475632
+```
+
+```{r}
+# 年度极端情况的变化
+solar_stat <- solar_extreme %>%
+  group_by(year) %>%
+  summarise(year_blue = sum(blue)/(n()*sblue),year_oran = sum(oran)/(n()*soran),year_red = sum(red)/(n()*sred),
+            .groups ="drop")
+
+wind_stat <- wind_extreme %>%
+  group_by(year) %>%
+   summarise(year_blue = sum(blue)/(n()*wblue),year_oran = sum(oran)/(n()*woran),year_red = sum(red)/(n()*wred),
+            .groups ="drop")
+
+write.xlsx(as.data.frame(wind_stat), file = "June_new_res\\wind_yearly_nldo.xlsx")
+write.xlsx(as.data.frame(solar_stat), file = "June_new_res\\solar_yearly_nldo.xlsx")
+```
+
+
+
+```{r}
+# Calculate how many valid grids there are for each province
+ScenarioList <- c(6)
+BlankDB <- NULL
+for (Scenario in ScenarioList) {
+  sheet.name <- paste('PV Sc ', Scenario, sep = '')
+  Solar_Potential <- read_excel("Updated Results II.xlsx", sheet = sheet.name)
+  Solar_Potential$Scenario <- Scenario
+  BlankDB <- rbind(BlankDB, Solar_Potential)
+  rm(sheet.name)
+}
+Solar_Potential <-
+  BlankDB %>%
+  dplyr::select(9, 2:4, 7)
+rm(BlankDB)
+colnames(Solar_Potential) <- c("scenario","province","lon","lat","valid_area")
+solar_selected_area <- Solar_Potential[Solar_Potential$scenario == 6,]
+rm(Solar_Potential)
+
+ScenarioList <- c(6)
+BlankDB <- NULL
+for (Scenario in ScenarioList) {
+  sheet.name <- paste('Wind Sc ', Scenario, sep = '')
+  wind_Potential <- read_excel("Updated Results II.xlsx", sheet = sheet.name)
+  wind_Potential$Scenario <- Scenario
+  BlankDB <- rbind(BlankDB, wind_Potential)
+  rm(sheet.name)
+}
+wind_Potential <-
+  BlankDB %>%
+  dplyr::select(9, 2:4, 7)
+rm(BlankDB)
+colnames(wind_Potential) <- c("scenario","province","lon","lat","valid_area")
+wind_selected_area <- wind_Potential[wind_Potential$scenario == 6,]
+rm(wind_Potential)
+
+solar_province_n <- solar_selected_area %>%
+  group_by(province) %>%
+  summarise(province_site_n = n(), .groups = "drop")
+wind_province_n <- wind_selected_area %>%
+  group_by(province) %>%
+  summarise(province_site_n = n(), .groups = "drop")
+```
+
+```{r}
+# g_p,h (calculate ratio of extreme in different provinces in every hour)
+solar_gp <- solar_extreme %>%
+  group_by(province,adj_date,Hour) %>%
+  summarize(g_p_blue = sum(blue),g_p_oran = sum(oran),g_p_red = sum(red),.groups = "drop")  %>%
+  left_join(solar_province_n, by = "province")
+
+wind_gp <- wind_extreme %>%
+  group_by(province,adj_date,Hour) %>%
+  summarize(g_p_blue = sum(blue),g_p_oran = sum(oran),g_p_red = sum(red),.groups = "drop")  %>%
+  left_join(wind_province_n, by = "province")
+
+
+solar_gp$g_p_blue = solar_gp$g_p_blue / solar_gp$province_site_n
+solar_gp$g_p_oran = solar_gp$g_p_oran / solar_gp$province_site_n
+solar_gp$g_p_red = solar_gp$g_p_red / solar_gp$province_site_n
+
+wind_gp$g_p_blue = wind_gp$g_p_blue / wind_gp$province_site_n
+wind_gp$g_p_oran = wind_gp$g_p_oran / wind_gp$province_site_n
+wind_gp$g_p_red = wind_gp$g_p_red / wind_gp$province_site_n
+```
+
+```{r}
+# NLDO of every province
+solar_province_nldo <- solar_extreme %>%
+  group_by(province) %>%
+  summarise(nldo_blue = sum(blue)/(n()*sblue), nldo_oran = sum(oran)/(n()*soran), nldo_red = sum(red)/(n()*sred), .groups="drop")
+
+wind_province_nldo <- wind_extreme %>%
+  group_by(province) %>%
+  summarise(nldo_blue = sum(blue)/(n()*wblue), nldo_oran = sum(oran)/(n()*woran), nldo_red = sum(red)/(n()*wred), .groups="drop")
+
+write.xlsx(solar_province_nldo, file="solar_province_nldo.xlsx")
+write.xlsx(wind_province_nldo, file="wind_province_nldo.xlsx")
+```
+
+```{r}
+# NLDO of every site
+solar_site_nldo <- solar_extreme %>%
+  group_by(lon,lat,province) %>%
+  summarise(nldo_blue = sum(blue)/(n()*sblue), nldo_oran = sum(oran)/(n()*soran), nldo_red = sum(red)/(n()*sred), .groups="drop")
+
+wind_site_nldo <- wind_extreme %>%
+  group_by(lon,lat,province) %>%
+  summarise(nldo_blue = sum(blue)/(n()*wblue), nldo_oran = sum(oran)/(n()*woran), nldo_red = sum(red)/(n()*wred), .groups="drop")
+
+write.xlsx(solar_site_nldo, file="June_new_res\\solar_site_nldo.xlsx")
+write.xlsx(wind_site_nldo, file="June_new_res\\wind_site_nldo.xlsx")
+```
+
+
+
+
+```{r}
+# solar co df
+provinces <- solar_province_n$province
+blue_co_solar <- data.frame(matrix(nrow = 166552, ncol = length(provinces)))
+colnames(blue_co_solar) <- provinces
+for (province in provinces) {
+  province_data <- solar_gp$g_p_blue[solar_gp$province == province]
+  blue_co_solar[[province]] <- province_data
+}
+
+provinces <- solar_province_n$province
+oran_co_solar <- data.frame(matrix(nrow = 166552, ncol = length(provinces)))
+colnames(oran_co_solar) <- provinces
+for (province in provinces) {
+  province_data <- solar_gp$g_p_oran[solar_gp$province == province]
+  oran_co_solar[[province]] <- province_data
+}
+
+provinces <- solar_province_n$province
+red_co_solar <- data.frame(matrix(nrow = 166552, ncol = length(provinces)))
+colnames(red_co_solar) <- provinces
+for (province in provinces) {
+  province_data <- solar_gp$g_p_red[solar_gp$province == province]
+  red_co_solar[[province]] <- province_data
+}
+
+#delete columns with all zero value (delete some province with no extreme happened)
+blue_co_solar <- blue_co_solar[, colSums(blue_co_solar != 0) > 0]
+oran_co_solar <- oran_co_solar[, colSums(oran_co_solar != 0) > 0]
+red_co_solar <- red_co_solar[, colSums(red_co_solar != 0) > 0]
+
+save(blue_co_solar,file = "June_new_res\\blue_co_solar.RData")
+save(oran_co_solar,file = "June_new_res\\oran_co_solar.RData")
+save(red_co_solar,file = "June_new_res\\red_co_solar.RData")
+```
+
+```{r}
+# wind co df
+provinces <- wind_province_n$province
+blue_co_wind <- data.frame(matrix(nrow = 166552, ncol = length(provinces)))
+colnames(blue_co_wind) <- provinces
+for (province in provinces) {
+  province_data <- wind_gp$g_p_blue[wind_gp$province == province]
+  blue_co_wind[[province]] <- province_data
+}
+
+provinces <- wind_province_n$province
+oran_co_wind <- data.frame(matrix(nrow = 166552, ncol = length(provinces)))
+colnames(oran_co_wind) <- provinces
+for (province in provinces) {
+  province_data <- wind_gp$g_p_oran[wind_gp$province == province]
+  oran_co_wind[[province]] <- province_data
+}
+
+provinces <- wind_province_n$province
+red_co_wind <- data.frame(matrix(nrow = 166552, ncol = length(provinces)))
+colnames(red_co_wind) <- provinces
+for (province in provinces) {
+  province_data <- wind_gp$g_p_red[wind_gp$province == province]
+  red_co_wind[[province]] <- province_data
+}
+
+#delete columns with all zero value
+blue_co_wind <- blue_co_wind[, colSums(blue_co_wind != 0) > 0]
+oran_co_wind <- oran_co_wind[, colSums(oran_co_wind != 0) > 0]
+red_co_wind <- red_co_wind[, colSums(red_co_wind != 0) > 0]
+
+save(blue_co_wind,file = "June_new_res\\blue_co_wind.RData")
+save(oran_co_wind,file = "June_new_res\\oran_co_wind.RData")
+save(red_co_wind,file = "June_new_res\\red_co_wind.RData")
+```
+
+
+```{r}
+i = "red_co_wind"
+co_df <- get(i)
+df <- as.data.frame(t(co_df))
+df <- df[, colSums(df != 0) > 0]
+#save(df, file="June_new_res\\df_for_cluster.RData")
+#write.csv(df, file="df_for_cluster.csv")
+
+# cluster
+fviz_nbclust(df, kmeans, k.max = 9, method = "wss")
+fviz_nbclust(df, kmeans, k.max = 9, method = "silhouette")
+fviz_nbclust(df, kmeans, k.max = 9, method = "gap_stat")
+```
+```{r}
+kmean_calc <- function(df, ...){
+  kmeans(df, scaled = ..., nstart = 30)
+}
+km2 <- kmean_calc(df, 2)
+km3 <- kmean_calc(df, 3)
+km4 <- kmeans(df, 4)
+km5 <- kmeans(df, 5)
+km6 <- kmeans(df, 6)
+km7 <- kmeans(df, 7)
+km8 <- kmeans(df, 8)
+km9 <- kmeans(df, 9)
+
+ssc <- data.frame(
+  kmeans = c(2,3,4,5,6,7,8,9),
+  within_ss = c(mean(km2$withinss), mean(km3$withinss), mean(km4$withinss), mean(km5$withinss), mean(km6$withinss), mean(km7$withinss), mean(km8$withinss), mean(km9$withinss)),
+  between_ss = c(km2$betweenss, km3$betweenss, km4$betweenss, km5$betweenss, km6$betweenss, km7$betweenss, km8$betweenss, km9$betweenss)
+)
+
+library(magrittr)
+ssc %<>% gather(., key = "measurement", value = value, -kmeans)
+#ssc$value <- log10(ssc$value)
+ssc %>% ggplot(., aes(x=kmeans, y=log10(value), fill = measurement)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  ggtitle("Cluster Model Comparison") + xlab("Number of Clusters") + 
+  ylab("Log10 Total Sum of Squares") + 
+  scale_x_discrete(name = "Number of Clusters", limits = c("0", "2", "3", "4", "5", "6", "7", "8","9","10"))
+```
+
+```{r}
+# visual
+# --- correlation plot ---
+png(filename = "corrplot.png", width = 2400, height = 1600)
+par(mfrow = c(2, 3))
+#solar
+for(df_name in c("blue_co_solar","oran_co_solar","red_co_solar")){
+  data <- get(df_name)
+  
+  corre <- cor(data)
+  corrplot(corre,
+         method = "shade", # Correlation plot method
+         order = "hclust",
+         hclust.method = "ward.D",
+         addrect = 7,              # If order = "hclust", number of cluster rectangles
+         rect.col = 2,             # Color of the rectangles
+         rect.lwd = 4,
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "black", # Labels color
+         bg = "white",     # Background color
+         #title = df_name,       # Main title
+         col = NULL,       # Color palette
+         number.cex = 1.3, tl.cex = 2,
+         addCoef.col = "black",
+         cl.pos = 'n')
+}
+# wind
+for(df_name in c("blue_co_wind","oran_co_wind","red_co_wind")){
+  data <- get(df_name)
+  data <- data[, colSums(data != 0) > 0]
+  corre <- cor(data)
+  corrplot(corre,
+         method = "shade", # Correlation plot method
+         order = "hclust",
+         hclust.method = "ward.D",
+         addrect = 7,              # If order = "hclust", number of cluster rectangles
+         rect.col = 2,             # Color of the rectangles
+         rect.lwd = 4,
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "black", # Labels color
+         bg = "white",     # Background color
+         #title = df_name,       # Main title
+         col = NULL,       # Color palette
+         number.cex = 1.3, tl.cex = 2,
+         addCoef.col = "black",
+         cl.pos = 'n')
+}
+#colorlegend(xlim=c(5,15), ylim=c(10,15), scalebluered, c(seq(-1,1,.25)), align="l", vertical=TRUE, addlabels=TRUE)
+dev.off()
+```
+
+
+```{r}
+solar_extreme$mon <- month(solar_extreme$adj_date)
+wind_extreme$mon <- month(wind_extreme$adj_date)
+
+# calculate mean ratio of extreme in every month of every hour
+mon_solar <- solar_extreme %>%
+    group_by(mon,Hour) %>%
+    summarise(blue_ratio = sum(blue)/(n()*sblue), 
+              oran_ratio = sum(oran)/(n()*soran),
+              red_ratio = sum(red)/(n()*sred),
+              
+              blue_sum = sum(blue),
+              oran_sum = sum(oran),
+              red_sum = sum(red),
+              .groups = 'drop')
+
+mon_wind <- wind_extreme %>%
+    group_by(mon,Hour) %>%
+    summarise(blue_ratio = sum(blue)/(n()*wblue), 
+              oran_ratio = sum(oran)/(n()*woran),
+              red_ratio = sum(red)/(n()*wred),
+              
+              blue_sum = sum(blue),
+              oran_sum = sum(oran),
+              red_sum = sum(red),
+              .groups = 'drop')
+
+months <- rep(1:12, each = 24)
+Hours <- rep(0:23)
+# Create data fram for solar power summary
+sum_solar <- data.frame(
+  Month = months,
+  Time = rep(Hours, 12)
+)
+sum_solar <- left_join(sum_solar,mon_solar,by = c("Month"="mon","Time"="Hour"))
+sum_solar$Time <- as.numeric(sum_solar$Time)
+
+sum_wind <- data.frame(
+  Month = months,
+  Time = rep(Hours, 12)
+)
+sum_wind <- left_join(sum_wind,mon_wind,by = c("Month"="mon","Time"="Hour"))
+sum_wind$Time <- as.numeric(sum_wind$Time)
+
+
+# draw solar
+con_blue_solar <- plot_ly(x=sum_solar$Month,y=sum_solar$Time,z=sum_solar$blue_ratio, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_solar$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_solar$Time,title = "Hour"))
+
+con_oran_solar <- plot_ly(x=sum_solar$Month,y=sum_solar$Time,z=sum_solar$oran_ratio, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_solar$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_solar$Time,title = "Hour"))
+
+con_red_solar <- plot_ly(x=sum_solar$Month,y=sum_solar$Time,z=sum_solar$red_ratio, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_solar$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_solar$Time,title = "Hour"))
+
+
+# draw wind
+con_blue_wind <- plot_ly(x=sum_wind$Month,y=sum_wind$Time,z=sum_wind$blue_ratio, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_wind$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_wind$Time,title = "Hour"))
+
+con_oran_wind <- plot_ly(x=sum_wind$Month,y=sum_wind$Time,z=sum_wind$oran_ratio, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_wind$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_wind$Time,title = "Hour"))
+
+con_red_wind <- plot_ly(x=sum_wind$Month,y=sum_wind$Time,z=sum_wind$red_ratio, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_wind$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_wind$Time,title = "Hour"))
+```
+
+
+```{r}
+fig <- subplot(con_blue_solar,con_blue_wind,
+               con_oran_solar,con_oran_wind,
+               con_red_solar,con_red_wind,
+               nrows = 3)
+fig
+```
+
+```{r}
+# heat map
+blue_solar <- mon_solar$blue_ratio
+blue_mat <- matrix(blue_solar,nrow = 12,ncol = 24,byrow=TRUE)
+rownames(blue_mat) <- c(1:12)
+colnames(blue_mat) <- c(0:23)
+
+
+library(viridisLite)
+library(lattice)
+coul <- viridis(100)
+
+levelplot(blue_mat, col.regions = coul)
+
+```
+
+
+```{r}
+for(df_name in c("blue_co_wind","oran_co_wind","red_co_wind")){
+  co_df <- get(df_name)
+  df <- as.data.frame(t(co_df))
+  df <- df[, colSums(df != 0) > 0]
+  
+  dis_df <- dist(df, method = 'euclidean')
+  
+  set.seed(240)
+  Hierar_cl <- hclust(dis_df, method = "ward.D2")
+  
+  png(filename = paste0(df_name,"_hcluster",".png"), width = 1200, height = 1000)
+  plot(Hierar_cl)
+  dev.off()
+}
+```
+
+
+
+```{r}
+for(df_name in c("blue_co_solar","oran_co_solar","red_co_solar")){
+  co_df <- get(df_name)
+  df <- as.data.frame(t(co_df))
+  df <- df[, colSums(df != 0) > 0]
+  
+  dis_df <- dist(df, method = 'euclidean')
+  
+  set.seed(240)
+  Hierar_cl <- hclust(dis_df, method = "ward.D2")
+  
+  png(filename = paste0(df_name,"_hcluster",".png"), width = 1200, height = 1000)
+  plot(Hierar_cl)
+  dev.off()
+}
+```
+
+
+```{r}
+# site extreme -- wind
+site_wind_blue <- data.frame(matrix(nrow = 166552, ncol = 773))
+site_wind_list <- vector("list", length = 773)
+for(i in 1:773){
+  start <- 1+(166552*(i-1))
+  end <- 166552*i
+  site_wind_blue[,i] <- wind_extreme$blue[start:end]
+  site_wind_list[i] <- paste(wind_extreme$province[start],
+                              wind_extreme$lon[start],
+                              wind_extreme$lat[start],sep=" ")
+}
+colnames(site_wind_blue) <- site_wind_list
+
+site_wind_oran <- data.frame(matrix(nrow = 166552, ncol = 773))
+for(i in 1:773){
+  start <- 1+(166552*(i-1))
+  end <- 166552*i
+  site_wind_oran[,i] <- wind_extreme$oran[start:end]
+}
+colnames(site_wind_oran) <- site_wind_list
+
+site_wind_red <- data.frame(matrix(nrow = 166552, ncol = 773))
+for(i in 1:773){
+  start <- 1+(166552*(i-1))
+  end <- 166552*i
+  site_wind_red[,i] <- wind_extreme$red[start:end]
+}
+colnames(site_wind_red) <- site_wind_list
+
+
+# site extreme -- solar
+site_solar_blue <- data.frame(matrix(nrow = 166552, ncol = 1666))
+site_solar_list <- vector("list", length = 1666)
+for(i in 1:1666){
+  start <- 1+(166552*(i-1))
+  end <- 166552*i
+  site_solar_blue[,i] <- solar_extreme$blue[start:end]
+  site_solar_list[i] <- paste(solar_extreme$province[start],
+                              solar_extreme$lon[start],
+                              solar_extreme$lat[start],sep=" ")
+}
+colnames(site_solar_blue) <- site_solar_list
+
+site_solar_oran <- data.frame(matrix(nrow = 166552, ncol = 1666))
+for(i in 1:1666){
+  start <- 1+(166552*(i-1))
+  end <- 166552*i
+  site_solar_oran[,i] <- solar_extreme$oran[start:end]
+}
+colnames(site_solar_oran) <- site_solar_list
+
+site_solar_red <- data.frame(matrix(nrow = 166552, ncol = 1666))
+for(i in 1:1666){
+  start <- 1+(166552*(i-1))
+  end <- 166552*i
+  site_solar_red[,i] <- solar_extreme$red[start:end]
+}
+colnames(site_solar_red) <- site_solar_list
+
+# delete rows of all zero
+site_solar_blue <- site_solar_blue[rowSums(site_solar_blue != 0) > 0,]
+site_solar_oran <- site_solar_oran[rowSums(site_solar_oran != 0) > 0,]
+site_solar_red <- site_solar_red[rowSums(site_solar_red != 0) > 0,]
+
+site_wind_blue <- site_wind_blue[rowSums(site_wind_blue != 0) > 0,]
+site_wind_oran <- site_wind_oran[rowSums(site_wind_oran != 0) > 0,]
+site_wind_red <- site_wind_red[rowSums(site_wind_red != 0) > 0,]
+
+
+# save data for the co-ocurrence network analyse
+save(site_solar_blue,file = "site_solar_blue.RData")
+save(site_solar_oran,file = "site_solar_oran.RData")
+save(site_solar_red,file = "site_solar_red.RData")
+save(site_wind_blue,file = "site_wind_blue.RData")
+save(site_wind_oran,file = "site_wind_oran.RData")
+save(site_wind_red,file = "site_wind_red.RData")
+```
+
+
+```{r}
+save(sum_solar,file = "June_new_res\\time_sum_solar.RData")
+save(sum_wind,file = "June_new_res\\time_sum_wind.RData")
+```
+
+```{r}
+load("June_new_res\\time_sum_solar.RData")
+load("June_new_res\\time_sum_wind.RData")
+load("June_new_res\\time_sum_sowin.RData")
+```
+
+```{r}
+ggplot(sum_solar, aes(Month, Time, z = blue_ratio)) +
+  stat_contour_filled() +
+  # scale_fill_distiller(super = metR::ScaleDiscretised, palette = "RdYlBu") +
+  scale_fill_manual(values= rev(met.brewer("Hiroshige", 15))) +
+  # scale_fill_scico_d(palette = "batlow", direction = -1) +
+  # scale_fill_manual(values = rev(color_list_3yrs)) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  facet_wrap(~svi_rank_level + census_region) +
+  labs(#title = "Start Time of 8+ Hour Outage by County SVI Quartiles and Census Region",
+       fill = "Counts of Outages") +
+  ylab("Time of Outage (Military Time)") +
+  
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x = element_text(size = 8, angle = 90),
+        axis.title.y = element_text(size = 8),
+        axis.text.y = element_text(size = 5),
+        legend.title = element_text(size=10),
+        legend.text = element_text(size=8),
+        legend.key.height= unit(0.5, 'cm'),
+        plot.title = element_text(size = 12, hjust = 0.5),
+        strip.text.x = element_text(size = 5),
+        strip.text.y = element_text(size = 5)) +
+  theme(panel.spacing.x = unit(1, "lines")) # Change horizontal spacing between facets
+
+#interestingly, the medium SVI rank has the highest number of outages (occurring at night) --> could be that they are citi3s
+#check what types of places high vs medium svi is
+ggsave(path = here::here("Visuals"),
+       filename = "contour_svi_region.jpg", 
+       dpi=300,
+       height=4, width=7, units="in")
+```

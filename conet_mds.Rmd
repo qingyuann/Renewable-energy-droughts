@@ -1,0 +1,98 @@
+---
+title: "conet_mds"
+author: "Qingyuan"
+date: "2023-07-25"
+output: html_document
+---
+
+```{r}
+library(vegan)
+
+co_blue <- 29409-co_soblue
+diag(co_blue) <- 0
+mds_co <- metaMDS(co_blue, k = 3)
+
+# create a data set for vertices information
+vertices_data <- data.frame(matrix(nrow = 672, ncol = 4))
+colnames(vertices_data) <- c("ID","Province","lon","lat")
+site_data <- colnames(mat_jac_wind_blue)
+for(i in 1:672){
+  sp <- strsplit(site_data[i],split = " ")
+  vertices_data$ID[i] <- i
+  vertices_data$Province[i] <- sp[[1]][1]
+  vertices_data$lon[i] <- sp[[1]][2]
+  vertices_data$lat[i] <- sp[[1]][3]
+}
+```
+
+
+
+
+```{r}
+plot(mds_co)
+text(mds_co, labels = vertices_data$Province)
+
+
+dim1 <- mds_co$points[,1]
+dim2 <- mds_co$points[,2]
+co <- data.frame(cbind(dim1,dim2))
+co$label <- vertices_data$Province
+co$lon <- vertices_data$lon
+co$lat <- vertices_data$lat
+co$id <- vertices_data$ID
+
+write.csv(co,file="wind_blue_mds.csv")
+```
+
+
+
+```{r}
+library(proxy)
+jac <- dist(as.matrix(t(site_wind_blue)),method = "Jaccard")
+eu <- jac
+mds_eu <- metaMDS(jac, k = 3)
+
+jm <- as.matrix(jac)
+```
+
+
+```{r}
+site_wind_blue <- site_wind_blue[,colSums(site_wind_blue != 0) > 0]
+dist_jac_wind_blue <- dist(as.matrix(t(site_wind_blue)),method = "Jaccard")
+mat_jac_wind_blue <- as.matrix(dist_jac_wind_blue)
+
+mds_jac_wind_blue <- metaMDS(mat_jac_wind_blue, k = 3,trymax = 5)
+
+plot(mds_jac_wind_blue)
+
+
+dim1 <- mds_jac_wind_blue$points[,1]
+dim2 <- mds_jac_wind_blue$points[,2]
+co <- data.frame(cbind(dim1,dim2))
+co$label <- vertices_data$Province
+co$lon <- vertices_data$lon
+co$lat <- vertices_data$lat
+co$id <- vertices_data$ID
+
+write.csv(co,file="jac_wind_blue_mds.csv")
+```
+
+
+```{r}
+# turn jaccard distance matrix to edges data
+edges_data <- data.frame(matrix(nrow =225456, ncol = 3))
+colnames(edges_data) <- c("source","target","weight")
+
+indices <- t(combn(672, 2))
+edges_data$source <- indices[,1]
+edges_data$target <- indices[,2]
+edges_data$weight <- t(mat_jac_wind_blue)[lower.tri(mat_jac_wind_blue)]
+
+edges_data <- subset(edges_data, is.na(weight) == FALSE)
+edges_data$weight2 <- 1 - edges_data$weight
+
+jac_edges_win_blue <- subset(edges_data, weight2 > 0)
+
+write.csv(jac_edges_win_blue, file = "jac_edges_win_blue_new_0.3.csv")
+write.csv(vertices_data, file = "jac_win_blue_vertices.csv")
+```

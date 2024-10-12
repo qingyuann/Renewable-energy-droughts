@@ -1,0 +1,353 @@
+---
+title: "re_data"
+output: html_document
+date: "2023-06-06"
+---
+  
+```{r}
+library(readxl)
+library(dplyr)
+library(lubridate)
+```
+
+```{r}
+# This file is used for pre process the original data of wind
+
+ScenarioList <- c(6)
+
+BlankDB <- NULL
+
+for (Scenario in ScenarioList) {
+  sheet.name <- paste('Wind Sc ', Scenario, sep = '')
+  Wind_Potential <- read_excel("Updated Results II.xlsx", sheet = sheet.name)
+  Wind_Potential$Scenario <- Scenario
+  BlankDB <- rbind(BlankDB, Wind_Potential)
+  rm(sheet.name)
+}
+
+Wind_Potential <-
+  BlankDB %>%
+  dplyr::select(9, 2:4, 7)
+
+rm(BlankDB)
+
+colnames(Wind_Potential) <- c("scenario","province","lon","lat","valid_area")
+
+selected_area <- Wind_Potential[Wind_Potential$scenario == 6,]
+rm(Wind_Potential)
+```
+
+```{r}
+# The function to pre process original data
+# Based on wind speed data calculate wind power
+calculate_wind50T80 <- function(m) {
+  m <- m * ((80/50)^0.143) #elevate wind speed from 50m to 80m
+  if(m <= 3) {
+    return(0)
+  }else if(m >= 14.5 & m <= 25) {
+    return(1)
+  }else if (m > 25) {
+    return(0)
+  }else if(m >= 3 & m <= 6) {
+    k <- 1.78*(m^5)-40.636*(m^4)+365.88*(m^3)-1604.4*(m^2)+3460*m-2960.184 #power curve comes from GE 1.5sl
+    k <- k/1500
+    return(k)
+  }else if (m > 6 & m <= 9) {
+    k <- (-2.93333)* (m^5)+107.7*(m^4)-1573.27*(m^3) +11460.158*(m^2) -41528.1*m+59908.2
+    k <- k/1500
+    return(k)
+  }else{
+    k <- 0.15247*(m^6)-11.090005*(m^5)+334.2735*(m^4)-5339.027*(m^3)+47583.517*(m^2)-223812*m+433774.2
+    k <- k/1500
+    return(k)
+  }
+}
+
+calculate_wind50T100 <- function(m) {
+  m <- m * ((100/50)^0.143) #elevate wind speed from 50m to 100m
+  if(m <= 3) {
+    return(0)
+  }else if(m >= 14.5 & m <= 25) {
+    return(1)
+  }else if (m > 25) {
+    return(0)
+  }else if(m >= 3 & m <= 6) {
+    k <- 1.78*(m^5)-40.636*(m^4)+365.88*(m^3)-1604.4*(m^2)+3460*m-2960.184 #power curve comes from GE 1.5sl
+    k <- k/1500
+    return(k)
+  }else if (m > 6 & m <= 9) {
+    k <- (-2.93333)* (m^5)+107.7*(m^4)-1573.27*(m^3) +11460.158*(m^2) -41528.1*m+59908.2
+    k <- k/1500
+    return(k)
+  }else{
+    k <- 0.15247*(m^6)-11.090005*(m^5)+334.2735*(m^4)-5339.027*(m^3)+47583.517*(m^2)-223812*m+433774.2
+    k <- k/1500
+    return(k)
+  }
+}
+
+calculate_wind50T150 <- function(m) {
+  m <- m * ((150/50)^0.143) #elevate wind speed from 50m to 150m
+  if(m <= 3) {
+    return(0)
+  }else if(m >= 14.5 & m <= 25) {
+    return(1)
+  }else if (m > 25) {
+    return(0)
+  }else if(m >= 3 & m <= 6) {
+    k <- 1.78*(m^5)-40.636*(m^4)+365.88*(m^3)-1604.4*(m^2)+3460*m-2960.184 #power curve comes from GE 1.5sl
+    k <- k/1500
+    return(k)
+  }else if (m > 6 & m <= 9) {
+    k <- (-2.93333)* (m^5)+107.7*(m^4)-1573.27*(m^3) +11460.158*(m^2) -41528.1*m+59908.2
+    k <- k/1500
+    return(k)
+  }else{
+    k <- 0.15247*(m^6)-11.090005*(m^5)+334.2735*(m^4)-5339.027*(m^3)+47583.517*(m^2)-223812*m+433774.2
+    k <- k/1500
+    return(k)
+  }
+}
+```
+
+```{r setup, warning=FALSE}
+Wind_all <- NULL
+for(i in 2000:2018){
+  dataname <- paste0("wea.",i,".RData")
+  load(dataname)
+  wind <- wea[ , c(2,3,1,4,8)]
+  rm(wea)
+  wind <- inner_join(wind, selected_area, by=c("lon","lat"))
+  
+  wind <- wind[,c(1,2,3,4,5,7)]
+  
+  
+  wind$cf = sapply(wind$W50M, calculate_wind50T80)
+  
+  
+  wind$datetime=paste(wind$date,wind$hour,sep=" ")
+  wind$date_time <- as.POSIXct(wind$datetime, format = "%Y%m%d %H", tz = "GMT")
+  attr(wind$date_time, "tzone") <- "Asia/Shanghai"
+  
+  wind <- wind[,c(9,1,2,5,6,7)]
+  
+  wind$date <- format(wind$date_time,"%Y-%m-%d")
+  wind$StartHour <- format(wind$date_time,"%H")
+  
+  wind <-  wind[,c(1,2,3,5,6,7,8)]
+  
+  Wind_all <- rbind(Wind_all,wind)
+  print(i)
+  rm(wind)
+}
+```
+
+```{r}
+date_time <- unique(Wind_all$date_time)
+len <- length(date_time)
+len
+wind_site <- NULL
+```
+
+```{r}
+for(i in 1:nrow(selected_area)){
+  lo = selected_area$lon[i]
+  la = selected_area$lat[i]
+  pro = selected_area$province[i]
+  site_data <- subset(Wind_all,lon==lo & lat==la & province==pro)
+  
+  #nrow(site_data) supposed to be 166560(equal to len)
+  
+  #calculate cf in coming three hours
+  v_lag0 <- site_data$cf[1:(len-2)]
+  v_lag1 <- site_data$cf[2:(len-1)]
+  v_lag2 <- site_data$cf[3:len]
+  site_data$cf_3hour <- 0
+  site_data$cf_3hour[1:(len-2)] <- v_lag0 + v_lag1 + v_lag2
+  
+  #calculate cf in coming six hours
+  v_lag0 <- site_data$cf[1:(len-5)]
+  v_lag1 <- site_data$cf[2:(len-4)]
+  v_lag2 <- site_data$cf[3:(len-3)]
+  v_lag3 <- site_data$cf[4:(len-2)]
+  v_lag4 <- site_data$cf[5:(len-1)]
+  v_lag5 <- site_data$cf[6:(len)]
+  
+  site_data$cf_6hour <- 0
+  site_data$cf_6hour[1:(len-5)] <- v_lag0 + v_lag1 + v_lag2 +
+    v_lag3 + v_lag4 + v_lag5
+  
+  #delete hours in 2019-01-01(incomplete)
+  site_data <- site_data[c(1:166552),]
+  
+  wind_site <- rbind(wind_site,site_data)
+  print(i)
+}
+```
+
+```{r}
+save(wind_site,file="wind_site_June.RData")
+```
+
+```{r}
+load("wind_site_June.RData")
+site_test <- wind_site %>%
+  group_by(lon,lat,province) %>%
+  summarise(s=n(),.groups = "drop")
+```
+
+```{r}
+season_cal <- function(m){
+  if(m %in% c(3,4,5)){
+    return("Spring")
+  }
+  if(m %in% c(6,7,8)){
+    return("Summer")
+  }
+  if(m %in% c(9,10,11)){
+    return("Fall")
+  }
+  if(m %in% c(12,1,2)){
+    return("Winter")
+  }
+}
+
+one_site <- wind_site[c(1:166552),]
+one_site$mon <- month(one_site$date_time)
+one_site$season <- sapply(one_site$mon,season_cal)
+sea_one_site <- one_site$season
+sea <- rep(sea_one_site,773)
+wind_site$season <- sea
+
+rm(one_site)
+rm(sea)
+rm(sea_one_site)
+```
+
+```{r}
+# mean cf of each site in different season/time period
+# 24 * 4 * 773
+mean_site <- wind_site %>%
+  group_by(lon,lat,province,season,StartHour) %>%
+  summarise(mean_3hour = mean(cf_3hour), mean_6hour = mean(cf_6hour), .groups="drop")
+
+wind_site <- left_join(wind_site,mean_site,by=c("lon","lat","province",
+                                                "season","StartHour"))
+wind_site$cf_dis3 <- wind_site$cf_3hour - wind_site$mean_3hour
+wind_site$cf_dis6 <- wind_site$cf_6hour - wind_site$mean_6hour
+```
+
+
+```{r}
+wind_blue_q = unname(quantile(wind_site$cf_dis3, probs = 0.0333))
+wind_oran_q = unname(quantile(wind_site$cf_dis3, probs = 0.0167))
+wind_red_q  = unname(quantile(wind_site$cf_dis6, probs = 0.00167))
+
+wind_site$blue_period <- ifelse(wind_site$cf_dis3 < wind_blue_q, 1, 0)
+wind_site$oran_period <- ifelse(wind_site$cf_dis3 < wind_oran_q, 1, 0)
+wind_site$red_period <- ifelse(wind_site$cf_dis6 < wind_red_q, 1, 0)
+save(wind_site,file="wind_site_June.RData")
+```
+
+```{r}
+load("wind_site_June.RData")
+extreme_period <- wind_site[,c(1,2,3,4,6,7,10,15,16,17)]
+rm(wind_site)
+
+df = data.frame(StartHour = c(0:23,0:23,0:23), 
+                Hour = c(0:23,1:23,0,2:23,0,1))
+
+extreme_period$StartHour <- as.numeric(extreme_period$StartHour)
+extreme_time <- left_join(extreme_period, df, by="StartHour")
+
+df$adj_tag <- 0
+df$adj_tag[48] <- 1
+df$adj_tag[71] <- 1
+df$adj_tag[72] <- 1
+
+one_site <- extreme_time[c(1:(166552*3)),]
+one_site <- left_join(one_site, df, by=c("StartHour","Hour"))
+one_site$adj_date <- as.Date(one_site$date) + one_site$adj_tag
+extreme_time$adj_date <- rep(one_site$adj_date,773)
+
+rm(extreme_period)
+rm(one_site)
+extreme_hour <- extreme_time %>%
+  group_by(lon,lat,province,adj_date,Hour) %>%
+  summarise(blue=sum(blue_period),oran=sum(oran_period),.groups="drop")
+
+rm(extreme_time)
+
+extreme_hour$blue[extreme_hour$blue>1] <- 1
+extreme_hour$oran[extreme_hour$oran>1] <- 1
+
+wind_extreme_3 <- extreme_hour
+rm(extreme_hour)
+save(wind_extreme_3,file="wind_extreme_3.RData")
+```
+
+
+```{r}
+#cal red extreme(six hours)
+load("wind_site_June.RData")
+df = data.frame(StartHour = c(0:23,0:23,0:23,0:23,0:23,0:23),
+                Hour = c(0:23,1:23,0,2:23,0,1,3:23,0,1,2,4:23,0:3,5:23,0:4))
+
+extreme_period <- wind_site[,c(1,2,3,4,6,7,10,15,16,17)]
+rm(wind_site)
+extreme_period <- extreme_period[,c(1:7,10)]
+
+extreme_period$StartHour <- as.numeric(extreme_period$StartHour)
+extreme_time <- left_join(extreme_period, df, by="StartHour")
+
+#adjust date of hours across two days
+df$adj_tag <- 0
+df$adj_tag[c(48,71,72,94,95,96,117:120,140:144)] <- 1
+
+one_site <- extreme_time[c(1:(166552*6)),]
+one_site <- left_join(one_site, df, by=c("StartHour","Hour"))
+one_site$adj_date <- as.Date(one_site$date) + one_site$adj_tag
+extreme_time$adj_date <- rep(one_site$adj_date,773)
+
+rm(extreme_period)
+rm(one_site)
+
+
+extreme_hour_red <- extreme_time %>%
+  group_by(lon,lat,province,adj_date,Hour) %>%
+  summarise(red = sum(red_period), .groups="drop")
+rm(extreme_time)
+
+extreme_hour_red$red[extreme_hour_red$red>1] <- 1
+test = sum(extreme_hour_red$red)
+wind_extreme_6 <- extreme_hour_red
+rm(extreme_hour_red)
+save(wind_extreme_6, file = "wind_extreme_6.RData")
+```
+
+
+```{r}
+#combine blue orange red alert data frame
+load("wind_extreme_6.RData")
+load("wind_extreme_3.RData")
+
+#delete hours in 2019
+wind_extreme_6$year <- year(wind_extreme_6$adj_date)
+wind_extreme_3$year <- year(wind_extreme_3$adj_date)
+wind_extreme_6 <- wind_extreme_6[!(wind_extreme_6$year == 2019), ]
+wind_extreme_3 <- wind_extreme_3[!(wind_extreme_3$year == 2019), ]
+
+#combine
+wind_extreme_3$red <- wind_extreme_6$red
+wind_extreme <- wind_extreme_3
+rm(wind_extreme_3)
+save(wind_extreme,file="wind_extreme.RData")
+```
+
+```{r}
+sblue <- sum(wind_extreme$blue) / 128744696
+soran <- sum(wind_extreme$oran) / 128744696
+sred <- sum(wind_extreme$red) / 128744696
+```
+
+

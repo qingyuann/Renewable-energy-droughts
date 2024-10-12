@@ -1,0 +1,127 @@
+---
+title: "concurrence"
+author: "Qingyuan"
+date: "2023-07-03"
+output: html_document
+---
+```{r}
+library(readxl)
+library(xlsx)
+library(dplyr)
+library(zoo)
+library(factoextra)
+library(cluster)
+library(corrplot)
+library(plotly)
+library(lubridate)
+library(tidyr)
+```
+
+```{r}
+load("sowin.RData")
+```
+
+```{r}
+# 3997248 equal to 24 province * 166552 hour
+swblue <- sum(sowin$blue) / 3997248
+sworan <- sum(sowin$oran) / 3997248
+swred <- sum(sowin$red) / 3997248
+```
+
+```{r}
+# Changes in annual extremes
+sw_year <- sowin %>%
+  group_by(year) %>%
+  summarise(year_blue = sum(blue)/(n()*swblue), 
+            year_oran = sum(oran)/(n()*sworan),
+            year_red = sum(red)/(n()*swred),
+            .groups ="drop")
+
+write.xlsx(as.data.frame(sw_year), file = "June_new_res\\sowin_concurrence_yearly_nldo.xlsx")
+```
+
+```{r}
+# NLDO of every province
+sowin_province_nldo <- sowin %>%
+  group_by(province) %>%
+  summarise(nldo_blue = sum(blue)/(n()*swblue), nldo_oran = sum(oran)/(n()*sworan), nldo_red = sum(red)/(n()*swred), .groups="drop")
+
+write.xlsx(sowin_province_nldo, file="June_new_res\\sowin_province_nldo.xlsx")
+```
+
+```{r}
+sowin$mon <- month(sowin$adj_date)
+
+mon_sowin <- sowin %>%
+    group_by(mon,Hour) %>%
+    summarise(blue_ratio = sum(blue)/(n()*swblue), 
+              oran_ratio = sum(oran)/(n()*sworan),
+              red_ratio = sum(red)/(n()*swred),
+              
+              blue_sum = sum(blue),
+              oran_sum = sum(oran),
+              red_sum = sum(red),
+              .groups = 'drop')
+
+months <- rep(1:12, each = 24)
+Hours <- rep(0:23)
+# 创建数据表
+sum_sowin <- data.frame(
+  Month = months,
+  Time = rep(Hours, 12)
+)
+sum_sowin <- left_join(sum_sowin,mon_sowin,by = c("Month"="mon","Time"="Hour"))
+sum_sowin$Time <- as.numeric(sum_sowin$Time)
+
+con_blue_sowin <- plot_ly(x=sum_sowin$Month,y=sum_sowin$Time,z=sum_sowin$blue_ratio, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_sowin$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_sowin$Time,title = "Hour"))
+
+con_oran_sowin <- plot_ly(x=sum_sowin$Month,y=sum_sowin$Time,z=sum_sowin$oran_ratio, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_sowin$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_sowin$Time,title = "Hour"))
+
+con_red_sowin <- plot_ly(x=sum_sowin$Month,y=sum_sowin$Time,z=sum_sowin$red_ratio, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_sowin$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_sowin$Time,title = "Hour"))
+
+fig <- subplot(con_blue_sowin,
+               con_oran_sowin,
+               con_red_sowin,
+               nrows = 3)
+fig
+```
+
+
+
+```{r}
+save(sum_sowin,file = "June_new_res\\time_sum_sowin.RData")
+# heat map
+# row: month col: hour
+library(lattice)
+
+blue_vector <- sum_sowin$blue_ratio
+blue_mat <- matrix(blue_vector,nrow = 12,ncol = 24,byrow=TRUE)
+rownames(blue_mat) <- c(1:12)
+colnames(blue_mat) <- c(0:23)
+
+oran_vector <- sum_sowin$oran_ratio
+oran_mat <- matrix(oran_vector,nrow = 12,ncol = 24,byrow=TRUE)
+rownames(oran_mat) <- c(1:12)
+colnames(oran_mat) <- c(0:23)
+
+red_vector <- sum_sowin$red_ratio
+red_mat <- matrix(red_vector,nrow = 12,ncol = 24,byrow=TRUE)
+rownames(red_mat) <- c(1:12)
+colnames(red_mat) <- c(0:23)
+
+#set color
+library(viridisLite)
+coul <- viridis(100)
+
+
+levelplot(blue_mat, col.regions = coul)
+levelplot(oran_mat, col.regions = coul) 
+levelplot(red_mat, col.regions = coul) 
+```
+

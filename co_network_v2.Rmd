@@ -1,0 +1,269 @@
+---
+title: "co_network_v2"
+author: "Qingyuan"
+date: "2023-07-06"
+output: html_document
+---
+
+```{r}
+library(igraph)
+```
+
+
+```{r}
+for(df_name in c("site_solar_blue","site_solar_oran","site_solar_red",
+                 "site_wind_blue","site_wind_oran","site_wind_red")){
+  load(paste0(df_name,".RData"))
+}
+```
+
+```{r}
+# test data: solar_blue
+# remove sites don't have any extreme hour
+site_solar_blue <- site_solar_blue[,colSums(site_solar_blue != 0) > 0]
+
+#calculate co-occur matrix
+co_soblue <- t(site_solar_blue) %*% as.matrix(site_solar_blue)
+
+# turn co-occur matrix to edges data
+edges_data <- data.frame(matrix(nrow = 1386945, ncol = 3))
+colnames(edges_data) <- c("source","target","weight")
+
+indices <- t(combn(n, 2))
+edges_data$source <- indices[,1]
+edges_data$target <- indices[,2]
+edges_data$weight <- t(co_soblue)[lower.tri(co_soblue)]
+
+edges_data <- subset(edges_data, is.na(weight) == FALSE)
+edges_data <- subset(edges_data, weight > 0)
+
+# create a data set for vertices information
+vertices_data <- data.frame(matrix(nrow = 1666, ncol = 4))
+colnames(vertices_data) <- c("ID","Province","lon","lat")
+site_data <- colnames(co_soblue)
+for(i in 1:1666){
+  sp <- strsplit(site_data[i],split = " ")
+  vertices_data$ID[i] <- i
+  vertices_data$Province[i] <- sp[[1]][1]
+  vertices_data$lon[i] <- sp[[1]][2]
+  vertices_data$lat[i] <- sp[[1]][3]
+}
+
+
+edges_data2 <- subset(edges_data, weight > 1500)
+# use edge data to create igraph
+graph_solar_blue <- graph_from_data_frame(edges_data2, directed = FALSE, vertices = vertices_data)
+E(graph_solar_blue)$weight <- E(graph_solar_blue)$weight # Assigning edge attribute to each edge
+graph_solar_blue
+
+
+write.csv(edges_data2, file = "solar_edges2.csv")
+write.csv(vertices_data, file = "solar_vertices.csv")
+```
+
+
+
+
+
+```{r}
+V(graph_solar_blue)$Province
+graph_solar_blue[c(1:10),c(1:10)]
+```
+
+```{r}
+#1. Degree centrality
+solar_blue_deg<-degree(graph_solar_blue,mode=c("All"))
+V(graph_solar_blue)$degree<-solar_blue_deg
+V(graph_solar_blue)$degree
+which.max(solar_blue_deg)
+
+#2. Eigenvector centrality
+solar_blue_eig <- evcent(graph_solar_blue)$vector
+V(graph_solar_blue)$Eigen<-solar_blue_eig
+V(graph_solar_blue)$Eigen
+which.max(solar_blue_eig)
+
+#3. Betweenness centrality
+solar_blue_bw<-betweenness(graph_solar_blue, directed = FALSE)
+V(graph_solar_blue)$betweenness<-solar_blue_bw
+V(graph_solar_blue)$betweenness
+which.max(solar_blue_bw)
+
+DF<-as_long_data_frame(graph_solar_blue)
+```
+
+```{r}
+edge_density(graph_solar_blue)
+A1<-induced_subgraph(graph_solar_blue, V(graph_solar_blue)[Province=="Xinjiang"], impl=c("auto")) # Subgraphing into each class
+edge_density(A1) # Class level density
+```
+
+```{r}
+set.seed(1001)
+library(RColorBrewer) # This is the color library
+pal<-brewer.pal(length(unique(V(graph_solar_blue)$Province)), "Set3") # Vertex color assigned per each class number
+plot(graph_solar_blue,edge.color = 'grey',vertex.label.cex =0.5,
+     vertex.color=pal[as.numeric(as.factor(vertex_attr(graph_solar_blue, "Province")))],
+     vertex.size = sqrt(solar_blue_deg), edge.width=sqrt(E(graph_solar_blue)$weight/3),
+     layout = layout.fruchterman.reingold)
+
+V(graph_solar_blue)$color <- ifelse(V(graph_solar_blue)$name == "Fujian", 'cornflowerblue', 'orange') 
+plot(
+  graph_solar_blue,             
+  layout = layout.fruchterman.reingold, # Force Directed Layout 
+  #main = paste(coocTerm, ' Graph'),
+  vertex.label.family = "sans",
+  vertex.label.cex = 0.8,
+  vertex.shape = "circle",
+  vertex.label.dist = 0.5,          # Labels of the nodes moved slightly
+  vertex.frame.color = adjustcolor("darkgray", alpha.f = .5),
+  vertex.label.color = 'black',     # Color of node names
+  vertex.label.font = 2,            # Font of node names
+  vertex.label = V(graph_solar_blue)$province,      # node names
+  vertex.label.cex = 1 # font size of node names
+)
+```
+
+
+
+```{r}
+pairwise_jaccard <- function(X) {
+  # Computes the Jaccard distance between the rows of `X`.
+  
+  # Convert X to binary matrix
+  X <- as.matrix(X)
+  X <- as.integer(X != 0)
+  
+  # Calculate intersection, row sums, and unions
+  intrsct <- X %*% t(X)
+  row_sums <- diag(intrsct)
+  unions <- row_sums + t(row_sums) - intrsct
+  
+  # Calculate Jaccard distance
+  dist <- 1.0 - intrsct / unions
+  return(dist)
+}
+
+jaccard_distance <- function(x, y) {
+  # A function for finding the similarity between two binary vectors
+  
+  # Calculate the intersection and union using logical operations
+  intersection <- sum(x & y)
+  #print(intersection)
+  union <- sum(x | y)
+  #print(union)
+  
+  # Calculate the Jaccard similarity
+  similarity <- intersection / union
+  
+  return(1 - similarity)
+}
+```
+
+
+
+```{r}
+#test Jaccard
+
+a <- c(1,1,0,1)
+b <- c(1,1,0,1)
+jaccard_distance(a,b)
+
+jaccard_distance(site_solar_blue[,c(1)],site_solar_blue[,c(200)])
+```
+
+
+```{r}
+# Jaccard distance
+edges_data <- data.frame(matrix(nrow = 596756, ncol = 3))
+colnames(edges_data) <- c("source","target","weight")
+
+n = 1
+for(i in 2:773){
+  for(j in 1:(i-1)){
+    d = jaccard_distance(site_wind_blue[,c(i)],site_wind_blue[,c(j)])
+    edges_data[n,] <- c(i,j,d)
+    n = n+1
+    print(n)
+  }
+}
+
+edges_data <- edges_data[1:298378,]
+edges <- subset(edges_data, is.na(weight)==FALSE)
+edges$weight <- 1.000000000000000 - edges$weight
+edges <- subset(edges, weight>0)
+
+wind_blue_edges <- edges
+
+# create a data set for vertices information
+vertices_data <- data.frame(matrix(nrow = 773, ncol = 4))
+colnames(vertices_data) <- c("ID","Province","lon","lat")
+site_data <- colnames(site_wind_blue)
+for(i in 1:773){
+  sp <- strsplit(site_data[i],split = " ")
+  vertices_data$ID[i] <- i
+  vertices_data$Province[i] <- sp[[1]][1]
+  vertices_data$lon[i] <- sp[[1]][2]
+  vertices_data$lat[i] <- sp[[1]][3]
+}
+
+write.csv(edges, file = "wind_blue_edges.csv")
+write.csv(vertices_data, file = "wind_blue_vertices.csv")
+```
+
+
+```{r}
+graph_wind_blue <- graph_from_data_frame(wind_blue_edges, directed = FALSE, vertices = vertices_data)
+E(graph_wind_blue)$weight <- E(graph_wind_blue)$weight # Assigning edge attribute to each edge
+V(graph_wind_blue)$label <- V(graph_wind_blue)$Province
+graph_wind_blue
+
+wind_blue_deg<-degree(graph_wind_blue,mode=c("All"))
+V(graph_wind_blue)$degree<-wind_blue_deg
+V(graph_wind_blue)$degree
+which.max(wind_blue_deg)
+
+
+
+set.seed(1001)
+library(RColorBrewer) # This is the color library
+pal<-brewer.pal(length(unique(V(graph_wind_blue)$Province)), "Set3") # Vertex color assigned per each class number
+plot(graph_wind_blue,edge.color = 'grey',vertex.label.cex =0.5,
+     vertex.color=pal[as.numeric(as.factor(vertex_attr(graph_wind_blue, "Province")))],
+     vertex.size = sqrt(wind_blue_deg)/2, edge.width=sqrt(E(graph_wind_blue)$weight)*3,
+     layout = layout_with_fr)
+```
+
+```{r}
+edges_data <- data.frame(matrix(nrow = 298378, ncol = 3))
+colnames(edges_data) <- c("source","target","weight")
+
+n = 1
+for(i in 2:773){
+  for(j in 1:(i-1)){
+    d = jaccard_distance(site_wind_oran[,c(i)],site_wind_oran[,c(j)])
+    edges_data[n,] <- c(i,j,d)
+    n = n+1
+    print(n)
+  }
+}
+
+edges_data <- edges_data[1:298378,]
+edges <- subset(edges_data, is.na(weight)==FALSE)
+
+
+# create a data set for vertices information
+vertices_data <- data.frame(matrix(nrow = 773, ncol = 4))
+colnames(vertices_data) <- c("ID","Province","lon","lat")
+site_data <- colnames(site_wind_oran)
+for(i in 1:773){
+  sp <- strsplit(site_data[i],split = " ")
+  vertices_data$ID[i] <- i
+  vertices_data$Province[i] <- sp[[1]][1]
+  vertices_data$lon[i] <- sp[[1]][2]
+  vertices_data$lat[i] <- sp[[1]][3]
+}
+
+write.csv(edges, file = "wind_oran_edges.csv")
+write.csv(vertices_data, file = "wind_oran_vertices.csv")
+```

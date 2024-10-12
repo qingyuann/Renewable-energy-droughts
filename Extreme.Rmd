@@ -1,0 +1,749 @@
+---
+title: "Extreme"
+output: html_document
+date: "2023-05-30"
+---
+```{r}
+library(zoo)
+library(corrplot)
+library(plotly)
+library(lubridate)
+```
+
+
+```{r}
+# load pre-processed data, 3-hour / 6-hour average cf of solar power and wind power data
+
+load("solar3.RData")
+load("solar6.RData")
+load("wind3.RData")
+load("wind6.RData")
+
+solar3 = solar3[,c(1:8)]
+solar6 = solar6[,c(1:8)]
+wind3 = wind3[,c(1:8)]
+wind6 = wind6[,c(1:8)]
+solar3$cf = solar3$cf * 3
+solar6$cf = solar6$cf * 6
+wind3$cf = wind3$cf * 3
+wind6$cf = wind6$cf * 6
+```
+
+```{r}
+# Update the average CF: the average CF of each time period in each season at each point location
+# solar: 1666 sites
+# wind:  773  sites
+site_mean_cf_solar3 <- solar3 %>%
+  group_by(lon,lat,province,season,three_tag) %>%
+  summarise(cf.mean = mean(cf),.groups = 'drop')
+site_mean_cf_solar6 <- solar6 %>%
+  group_by(lon,lat,province,season,six_tag) %>%
+  summarise(cf.mean = mean(cf),.groups = 'drop')
+
+site_mean_cf_wind3 <- wind3 %>%
+  group_by(lon,lat,province,season,three_tag) %>%
+  summarise(cf.mean = mean(cf),.groups = 'drop')
+site_mean_cf_wind6 <- wind6 %>%
+  group_by(lon,lat,province,season,six_tag) %>%
+  summarise(cf.mean = mean(cf),.groups = 'drop')
+
+
+solar3 <- left_join(solar3,site_mean_cf_solar3,by=c("lon","lat","province","season","three_tag"))
+solar6 <- left_join(solar6,site_mean_cf_solar6,by=c("lon","lat","province","season","six_tag"))
+wind3 <- left_join(wind3,site_mean_cf_wind3,by=c("lon","lat","province","season","three_tag"))
+wind6 <- left_join(wind6,site_mean_cf_wind6,by=c("lon","lat","province","season","six_tag"))
+
+# cf - cf.mean
+solar3$cf_dis <- solar3$cf - solar3$cf.mean
+solar6$cf_dis <- solar6$cf - solar6$cf.mean
+wind3$cf_dis <- wind3$cf - wind3$cf.mean
+wind6$cf_dis <- wind6$cf - wind6$cf.mean
+
+# Calculate the quantiles to filter the extreme events
+solar_blue_q = unname(quantile(solar3$cf_dis, probs = 0.1))
+solar_oran_q = unname(quantile(solar3$cf_dis, probs = 0.05))
+solar_red_q  = unname(quantile(solar6$cf_dis, probs = 0.01))
+wind_blue_q = unname(quantile(wind3$cf_dis, probs = 0.1))
+wind_oran_q = unname(quantile(wind3$cf_dis, probs = 0.05))
+wind_red_q = unname(quantile(wind6$cf_dis, probs = 0.01))
+
+# Make a table for calculating statistical extreme events
+solar_blue <- solar3[solar3$cf_dis < solar_blue_q,]
+solar_oran <- solar3[solar3$cf_dis < solar_oran_q,]
+solar_red  <- solar6[solar6$cf_dis < solar_red_q, ]
+
+wind_blue <- wind3[wind3$cf_dis < wind_blue_q,]
+wind_oran <- wind3[wind3$cf_dis < wind_oran_q,]
+wind_red  <- wind6[wind6$cf_dis < wind_red_q, ]
+
+
+solar_blue$year <- format(as.Date(solar_blue$adj_date, format="%Y-%m-%d"),"%Y")
+solar_oran$year <- format(as.Date(solar_oran$adj_date, format="%Y-%m-%d"),"%Y")
+solar_red$year  <- format(as.Date(solar_red$adj_date, format="%Y-%m-%d"),"%Y")
+
+wind_blue$year <- format(as.Date(wind_blue$adj_date, format="%Y-%m-%d"),"%Y")
+wind_oran$year <- format(as.Date(wind_oran$adj_date, format="%Y-%m-%d"),"%Y")
+wind_red$year <- format(as.Date(wind_red$adj_date, format="%Y-%m-%d"),"%Y")
+```
+
+
+```{r}
+# Annual change in the number of extreme cases
+solar_blue_stat <- solar_blue %>%
+  group_by(year) %>%
+  summarise(n = n(),.groups ="drop")
+solar_oran_stat <- solar_oran %>%
+  group_by(year) %>%
+  summarise(n = n(),.groups ="drop")
+solar_red_stat <- solar_red %>%
+  group_by(year) %>%
+  summarise(n = n(),.groups ="drop")
+
+write.xlsx(as.data.frame(solar_blue_stat),file = "solar_yearly.xlsx",sheetName = "Blue",append = TRUE)
+write.xlsx(as.data.frame(solar_oran_stat),file = "solar_yearly.xlsx",sheetName = "Oran",append = TRUE)
+write.xlsx(as.data.frame(solar_red_stat),file = "solar_yearly.xlsx",sheetName = "Red",append = TRUE)
+
+wind_blue_stat <- wind_blue %>%
+  group_by(year) %>%
+  summarise(n = n(),.groups ="drop")
+wind_oran_stat <- wind_oran %>%
+  group_by(year) %>%
+  summarise(n = n(),.groups ="drop")
+wind_red_stat <- wind_red %>%
+  group_by(year) %>%
+  summarise(n = n(),.groups ="drop")
+
+write.xlsx(as.data.frame(wind_blue_stat),file = "wind_yearly.xlsx",sheetName = "Blue",append = TRUE)
+write.xlsx(as.data.frame(wind_oran_stat),file = "wind_yearly.xlsx",sheetName = "Oran",append = TRUE)
+write.xlsx(as.data.frame(wind_red_stat), file = "wind_yearly.xlsx",sheetName = "Red",append = TRUE)
+```
+
+
+```{r}
+# Calculate how many valid grids each province has
+ScenarioList <- c(6)
+BlankDB <- NULL
+for (Scenario in ScenarioList) {
+  sheet.name <- paste('PV Sc ', Scenario, sep = '')
+  Solar_Potential <- read_excel("Updated Results II.xlsx", sheet = sheet.name)
+  Solar_Potential$Scenario <- Scenario
+  BlankDB <- rbind(BlankDB, Solar_Potential)
+  rm(sheet.name)
+}
+Solar_Potential <-
+  BlankDB %>%
+  dplyr::select(9, 2:4, 7)
+rm(BlankDB)
+colnames(Solar_Potential) <- c("scenario","province","lon","lat","valid_area")
+solar_selected_area <- Solar_Potential[Solar_Potential$scenario == 6,]
+rm(Solar_Potential)
+
+ScenarioList <- c(6)
+BlankDB <- NULL
+for (Scenario in ScenarioList) {
+  sheet.name <- paste('Wind Sc ', Scenario, sep = '')
+  wind_Potential <- read_excel("Updated Results II.xlsx", sheet = sheet.name)
+  wind_Potential$Scenario <- Scenario
+  BlankDB <- rbind(BlankDB, wind_Potential)
+  rm(sheet.name)
+}
+wind_Potential <-
+  BlankDB %>%
+  dplyr::select(9, 2:4, 7)
+rm(BlankDB)
+colnames(wind_Potential) <- c("scenario","province","lon","lat","valid_area")
+wind_selected_area <- wind_Potential[wind_Potential$scenario == 6,]
+rm(wind_Potential)
+
+solar_province_n <- solar_selected_area %>%
+  group_by(province) %>%
+  summarise(province_site_n = n(), .groups = "drop")
+wind_province_n <- wind_selected_area %>%
+  group_by(province) %>%
+  summarise(province_site_n = n(), .groups = "drop")
+```
+
+
+
+
+```{r}
+# Count the number of extreme events in each province
+solar_blue_pro <- solar_blue %>%
+  group_by(province) %>%
+  summarize(Extreme_n = n(),.groups ="drop") %>%
+  left_join(solar_province_n, by = ("province"))
+solar_oran_pro <- solar_oran %>%
+  group_by(province) %>%
+  summarize(Extreme_n = n(),.groups ="drop") %>%
+  left_join(solar_province_n, by = ("province"))
+solar_red_pro <- solar_red %>%
+  group_by(province) %>%
+  summarize(Extreme_n = n(),.groups ="drop") %>%
+  left_join(solar_province_n, by = ("province"))
+
+wind_blue_pro <- wind_blue %>%
+  group_by(province) %>%
+  summarize(Extreme_n = n(),.groups ="drop") %>%
+  left_join(wind_province_n, by = ("province"))
+wind_oran_pro <- wind_oran %>%
+  group_by(province) %>%
+  summarize(Extreme_n = n(),.groups ="drop") %>%
+  left_join(wind_province_n, by = ("province"))
+wind_red_pro <- wind_red %>%
+  group_by(province) %>%
+  summarize(Extreme_n = n(),.groups ="drop") %>%
+  left_join(wind_province_n, by = ("province"))
+
+
+# write data into xlsx files
+write.xlsx(as.data.frame(solar_blue_pro),file = "solar_stat_province.xlsx",sheetName = "Blue",append = TRUE)
+write.xlsx(as.data.frame(solar_oran_pro),file = "solar_stat_province.xlsx",sheetName = "Oran",append = TRUE)
+write.xlsx(as.data.frame(solar_red_pro), file = "solar_stat_province.xlsx",sheetName = "Red",append = TRUE)
+write.xlsx(as.data.frame(wind_blue_pro),file = "wind_stat_province.xlsx",sheetName = "Blue",append = TRUE)
+write.xlsx(as.data.frame(wind_oran_pro),file = "wind_stat_province.xlsx",sheetName = "Oran",append = TRUE)
+write.xlsx(as.data.frame(wind_red_pro), file = "wind_stat_province.xlsx",sheetName = "Red",append = TRUE)
+```
+
+
+```{r}
+# According to the quantiles, the point position table is updated, and the extreme event is recorded as 1 and else: 0
+solar3$blue <- ifelse(solar3$cf_dis < solar_blue_q, 1, 0)
+solar3$oran <- ifelse(solar3$cf_dis < solar_oran_q, 1, 0)
+solar6$red <- ifelse(solar6$cf_dis < solar_red_q, 1, 0)
+
+wind3$blue <- ifelse(wind3$cf_dis < wind_blue_q, 1, 0)
+wind3$oran <- ifelse(wind3$cf_dis < wind_oran_q, 1, 0)
+wind6$red <- ifelse(wind6$cf_dis < wind_red_q, 1, 0)
+
+# The incidence of extreme events in each time period in each province was calculated
+solar_blue_gp <- solar3 %>%
+  group_by(province,adj_date,three_tag,season) %>%
+  summarize(g_p = sum(blue),.groups = "drop")  %>%
+  left_join(solar_province_n, by = ("province"))
+solar_oran_gp <- solar3 %>%
+  group_by(province,adj_date,three_tag,season) %>%
+  summarize(g_p = sum(oran),.groups = "drop")  %>%
+  left_join(solar_province_n, by = ("province"))
+solar_red_gp <- solar6 %>%
+  group_by(province,adj_date,six_tag,season) %>%
+  summarize(g_p = sum(red),.groups = "drop")  %>%
+  left_join(solar_province_n, by = ("province"))
+
+wind_blue_gp <- wind3 %>%
+  group_by(province,adj_date,three_tag,season) %>%
+  summarize(g_p = sum(blue),.groups = "drop")  %>%
+  left_join(wind_province_n, by = ("province"))
+wind_oran_gp <- wind3 %>%
+  group_by(province,adj_date,three_tag,season) %>%
+  summarize(g_p = sum(oran),.groups = "drop")  %>%
+  left_join(wind_province_n, by = ("province"))
+wind_red_gp <- wind6 %>%
+  group_by(province,adj_date,six_tag,season) %>%
+  summarize(g_p = sum(red),.groups = "drop")  %>%
+  left_join(wind_province_n, by = ("province"))
+
+solar_blue_gp$g_p = solar_blue_gp$g_p / solar_blue_gp$province_site_n
+solar_oran_gp$g_p = solar_oran_gp$g_p / solar_oran_gp$province_site_n
+solar_red_gp$g_p = solar_red_gp$g_p / solar_red_gp$province_site_n
+wind_blue_gp$g_p = wind_blue_gp$g_p / wind_blue_gp$province_site_n
+wind_oran_gp$g_p = wind_oran_gp$g_p / wind_oran_gp$province_site_n
+wind_red_gp$g_p = wind_red_gp$g_p / wind_red_gp$province_site_n
+
+solar_blue_pro_gp <- solar_blue_gp %>%
+  group_by(province) %>%
+  summarise(mean_gp = mean(g_p))
+solar_oran_pro_gp <- solar_oran_gp %>%
+  group_by(province) %>%
+  summarise(mean_gp = mean(g_p))
+solar_red_pro_gp <- solar_red_gp %>%
+  group_by(province) %>%
+  summarise(mean_gp = mean(g_p))
+
+wind_blue_pro_gp <- wind_blue_gp %>%
+  group_by(province) %>%
+  summarise(mean_gp = mean(g_p))
+wind_oran_pro_gp <- wind_oran_gp %>%
+  group_by(province) %>%
+  summarise(mean_gp = mean(g_p))
+wind_red_pro_gp <- wind_red_gp %>%
+  group_by(province) %>%
+  summarise(mean_gp = mean(g_p))
+
+write.xlsx(as.data.frame(solar_blue_pro_gp),file = "solar_stat_pro_gp.xlsx",sheetName = "Blue",append = TRUE)
+write.xlsx(as.data.frame(solar_oran_pro_gp),file = "solar_stat_pro_gp.xlsx",sheetName = "Oran",append = TRUE)
+write.xlsx(as.data.frame(solar_red_pro_gp), file = "solar_stat_pro_gp.xlsx",sheetName = "Red",append = TRUE)
+write.xlsx(as.data.frame(wind_blue_pro_gp),file = "wind_stat_pro_gp.xlsx",sheetName = "Blue",append = TRUE)
+write.xlsx(as.data.frame(wind_oran_pro_gp),file = "wind_stat_pro_gp.xlsx",sheetName = "Oran",append = TRUE)
+write.xlsx(as.data.frame(wind_red_pro_gp), file = "wind_stat_pro_gp.xlsx",sheetName = "Red",append = TRUE)
+```
+
+
+```{r}
+# calculate the data frame for solar extreme event concurrence 
+provinces <- unique(solar_blue_gp$province)
+blue_co_solar <- data.frame(matrix(nrow = 55520, ncol = length(provinces)))
+colnames(blue_co_solar) <- provinces
+for (province in provinces) {
+  province_data <- solar_blue_gp$g_p[solar_blue_gp$province == province]
+  blue_co_solar[[province]] <- province_data
+}
+
+provinces <- unique(solar_oran_gp$province)
+oran_co_solar <- data.frame(matrix(nrow = 55520, ncol = length(provinces)))
+colnames(oran_co_solar) <- provinces
+for (province in provinces) {
+  province_data <- solar_oran_gp$g_p[solar_oran_gp$province == province]
+  oran_co_solar[[province]] <- province_data
+}
+
+provinces <- unique(solar_red_gp$province)
+red_co_solar <- data.frame(matrix(nrow = 27761, ncol = length(provinces)))
+colnames(red_co_solar) <- provinces
+for (province in provinces) {
+  province_data <- solar_red_gp$g_p[solar_red_gp$province == province]
+  red_co_solar[[province]] <- province_data
+}
+
+# calculate the data frame for wind extreme event concurrence
+provinces <- unique(wind_blue_gp$province)
+blue_co_wind <- data.frame(matrix(nrow = 55520, ncol = length(provinces)))
+colnames(blue_co_wind) <- provinces
+for (province in provinces) {
+  province_data <- wind_blue_gp$g_p[wind_blue_gp$province == province]
+  blue_co_wind[[province]] <- province_data
+}
+
+provinces <- unique(wind_oran_gp$province)
+oran_co_wind <- data.frame(matrix(nrow = 55520, ncol = length(provinces)))
+colnames(oran_co_wind) <- provinces
+for (province in provinces) {
+  province_data <- wind_oran_gp$g_p[wind_oran_gp$province == province]
+  oran_co_wind[[province]] <- province_data
+}
+
+provinces <- unique(wind_red_gp$province)
+red_co_wind <- data.frame(matrix(nrow = 27761, ncol = length(provinces)))
+colnames(red_co_wind) <- provinces
+for (province in provinces) {
+  province_data <- wind_red_gp$g_p[wind_red_gp$province == province]
+  red_co_wind[[province]] <- province_data
+}
+
+# visual
+# --- correlation plot ---
+png(filename = "corrplot.png", width = 2400, height = 1600)
+par(mfrow = c(2, 3))
+#solar
+for(df_name in c("blue_co_solar","oran_co_solar","red_co_solar")){
+  data <- get(df_name)
+  
+  corre <- cor(data)
+  corrplot(corre,
+         method = "shade", # Correlation plot method
+         order = "hclust",
+         hclust.method = "ward.D",
+         addrect = 7,              # If order = "hclust", number of cluster rectangles
+         rect.col = 2,             # Color of the rectangles
+         rect.lwd = 4,
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "black", # Labels color
+         bg = "white",     # Background color
+         #title = df_name,       # Main title
+         col = NULL,       # Color palette
+         number.cex = 1.3, tl.cex = 2,
+         addCoef.col = "black",
+         cl.pos = 'n')
+}
+# wind
+for(df_name in c("blue_co_wind","oran_co_wind","red_co_wind")){
+  data <- get(df_name)
+  data <- data[, colSums(data != 0) > 0]
+  corre <- cor(data)
+  corrplot(corre,
+         method = "shade", # Correlation plot method
+         order = "hclust",
+         hclust.method = "ward.D",
+         addrect = 7,              # If order = "hclust", number of cluster rectangles
+         rect.col = 2,             # Color of the rectangles
+         rect.lwd = 4,
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "black", # Labels color
+         bg = "white",     # Background color
+         #title = df_name,       # Main title
+         col = NULL,       # Color palette
+         number.cex = 1.3, tl.cex = 2,
+         addCoef.col = "black",
+         cl.pos = 'n')
+}
+#colorlegend(xlim=c(5,15), ylim=c(10,15), scalebluered, c(seq(-1,1,.25)), align="l", vertical=TRUE, addlabels=TRUE)
+dev.off()
+```
+
+
+```{r}
+# Wind and solar data are summed to compound extreme events
+# The average wind/solar energy for the province is obtained by averaging the 3/6 hour CF for all sites in the province
+for(df_name in c("solar3","wind3",)){
+  data <- get(df_name)
+  data_pro <- data %>%
+    group_by(adj_date, three_tag, season, province) %>%
+    summarise(pro_mean = mean(cf), .groups = "drop")
+  out_name <- paste0(df_name, "_pro")
+  assign(out_name, data_pro)
+  print("done")
+}
+for(df_name in c("solar6","wind6")){
+  data <- get(df_name)
+  data_pro <- data %>%
+    group_by(adj_date, six_tag, season, province) %>%
+    summarise(pro_mean = mean(cf), .groups = "drop")
+  out_name <- paste0(df_name, "_pro")
+  assign(out_name, data_pro)
+  print("done")
+}
+
+# Calculate the provinces that have both wind and solar power
+pro_sw <- inner_join(solar_blue_pro, wind_blue_pro, by="province")
+pro_sw_list <- pro_sw$province
+solar3_pro <- solar3_pro[solar3_pro$province %in% pro_sw_list, ]
+solar6_pro <- solar6_pro[solar6_pro$province %in% pro_sw_list, ]
+wind3_pro <- wind3_pro[wind3_pro$province %in% pro_sw_list, ]
+wind6_pro <- wind6_pro[wind6_pro$province %in% pro_sw_list, ]
+
+
+# Add up the CF for wind and solar
+so_win_3 <- left_join(solar3_pro,wind3_pro, by=c("adj_date","three_tag","province","season"))
+so_win_6 <- left_join(solar6_pro,wind6_pro, by=c("adj_date","six_tag","province","season"))
+so_win_3$add_cf <- so_win_3$pro_mean.x + so_win_3$pro_mean.y
+so_win_6$add_cf <- so_win_6$pro_mean.x + so_win_6$pro_mean.y
+
+so_win_3_mean <- so_win_3 %>%
+  group_by(province,season,three_tag) %>%
+  summarise(mean = mean(add_cf), .groups = "drop")
+so_win_6_mean <- so_win_6 %>%
+  group_by(province,season,six_tag) %>%
+  summarise(mean = mean(add_cf), .groups = "drop")
+
+so_win_3 <- left_join(so_win_3,so_win_3_mean, by=c("province","season","three_tag"))
+so_win_6 <- left_join(so_win_6,so_win_6_mean, by=c("province","season","six_tag"))
+
+# cf - cf.mean
+so_win_3$cf_dis = so_win_3$add_cf - so_win_3$mean
+so_win_6$cf_dis = so_win_6$add_cf - so_win_6$mean
+
+sowin_blue_q = unname(quantile(so_win_3$cf_dis, probs = 0.1))
+sowin_oran_q = unname(quantile(so_win_3$cf_dis, probs = 0.05))
+sowin_red_q = unname(quantile(so_win_6$cf_dis, probs = 0.01))
+
+so_win_3$blue <- ifelse(so_win_3$cf_dis < sowin_blue_q, 1, 0)
+so_win_3$oran <- ifelse(so_win_3$cf_dis < sowin_oran_q, 1, 0)
+so_win_6$red<- ifelse(so_win_6$cf_dis < sowin_red_q, 1, 0)
+```
+
+
+```{r}
+# The number of composite extreme events in each year
+so_win_blue <- so_win_3[so_win_3$cf_dis < sowin_blue_q,]
+so_win_oran <- so_win_3[so_win_3$cf_dis < sowin_oran_q,]
+so_win_red  <- so_win_6[so_win_6$cf_dis < sowin_red_q, ]
+
+so_win_blue$year <- format(as.Date(so_win_blue$adj_date, format="%Y-%m-%d"),"%Y")
+so_win_oran$year <- format(as.Date(so_win_oran$adj_date, format="%Y-%m-%d"),"%Y")
+so_win_red$year  <- format(as.Date(so_win_red$adj_date, format="%Y-%m-%d"),"%Y")
+
+so_win_blue_stat <- so_win_blue %>%
+  group_by(year) %>%
+  summarise(n = n(),.groups ="drop")
+so_win_oran_stat <- so_win_oran %>%
+  group_by(year) %>%
+  summarise(n = n(),.groups ="drop")
+so_win_red_stat <- so_win_red %>%
+  group_by(year) %>%
+  summarise(n = n(),.groups ="drop")
+
+write.xlsx(as.data.frame(so_win_blue_stat),file = "so_win_yearly.xlsx",sheetName = "Blue",append = TRUE)
+write.xlsx(as.data.frame(so_win_oran_stat),file = "so_win_yearly.xlsx",sheetName = "Oran",append = TRUE)
+write.xlsx(as.data.frame(so_win_red_stat),file = "so_win_yearly.xlsx",sheetName = "Red",append = TRUE)
+```
+
+
+```{r}
+# The number of composite extreme events in each province
+so_win_blue_pro <- so_win_blue %>%
+  group_by(province) %>%
+  summarise(p = n()/55520,.groups ="drop")
+so_win_oran_pro <- so_win_oran %>%
+  group_by(province) %>%
+  summarise(n = n()/55520,.groups ="drop")
+so_win_red_pro <- so_win_red %>%
+  group_by(province) %>%
+  summarise(n = n()/55520,.groups ="drop")
+
+write.xlsx(as.data.frame(so_win_blue_pro),file = "so_win_pro.xlsx",sheetName = "Blue",append = TRUE)
+write.xlsx(as.data.frame(so_win_oran_pro),file = "so_win_pro.xlsx",sheetName = "Oran",append = TRUE)
+write.xlsx(as.data.frame(so_win_red_pro),file = "so_win_pro.xlsx",sheetName = "Red",append = TRUE)
+```
+
+
+```{r}
+# Matrix of correlation coefficients for composite extreme events
+provinces <- pro_sw_list
+blue_co_so_win <- data.frame(matrix(nrow = 55520, ncol = length(provinces)))
+colnames(blue_co_so_win) <- provinces
+for (province in provinces) {
+  province_data <- so_win_3$blue[so_win_3$province == province]
+  blue_co_so_win[[province]] <- province_data
+}
+
+provinces <- pro_sw_list
+oran_co_so_win <- data.frame(matrix(nrow = 55520, ncol = length(provinces)))
+colnames(oran_co_so_win) <- provinces
+for (province in provinces) {
+  province_data <- so_win_3$oran[so_win_3$province == province]
+  oran_co_so_win[[province]] <- province_data
+}
+
+provinces <- pro_sw_list
+red_co_so_win <- data.frame(matrix(nrow = 27761, ncol = length(provinces)))
+colnames(red_co_so_win) <- provinces
+for (province in provinces) {
+  province_data <- so_win_6$red[so_win_6$province == province]
+  red_co_so_win[[province]] <- province_data
+}
+
+# visual
+# --- correlation plot ---
+png(filename = "corrplot.png", width = 2400, height = 800)
+par(mfrow = c(1, 3))
+
+for(df_name in c("blue_co_so_win","oran_co_so_win","red_co_so_win")){
+  data <- get(df_name)
+  data <- data[, colSums(data != 0) > 0]
+  corre <- cor(data)
+  corrplot(corre,
+         method = "shade", # Correlation plot method
+         order = "hclust",
+         hclust.method = "ward.D",
+         addrect = 7,              # If order = "hclust", number of cluster rectangles
+         rect.col = 2,             # Color of the rectangles
+         rect.lwd = 4,
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "black", # Labels color
+         bg = "white",     # Background color
+         #title = df_name,       # Main title
+         col = NULL,       # Color palette
+         number.cex = 1.3, tl.cex = 2,
+         addCoef.col = "black",
+         cl.pos = 'n')
+}
+#colorlegend(xlim=c(5,15), ylim=c(10,15), scalebluered, c(seq(-1,1,.25)), align="l", vertical=TRUE, addlabels=TRUE)
+dev.off()
+```
+
+
+
+
+
+```{r}
+# Calculate the occurrence of extreme events in each month for each time period and draw Contour plots
+mon_solar3 <- solar3 %>%
+  group_by(mon,three_tag) %>%
+  summarise(sum_blue = sum(blue), sum_oran=sum(oran), blue_ratio = sum_blue/n(), oran_ratio = sum_oran/n(),.groups = 'drop')
+
+months <- rep(1:12, each = 8)
+time_periods <- c("8-10", "11-13", "14-16", "17-19", "20-22", "23-1", "2-4", "5-7")
+
+# Creating data tables for 3 hour sum
+sum_solar3 <- data.frame(
+  Month = months,
+  TimePeriod = rep(time_periods, 12)
+)
+sum_solar3 <- left_join(sum_solar3,mon_solar3,by = c("Month"="mon","TimePeriod"="three_tag"))
+sum_solar3$TimeStart <- as.numeric(sub("-.*", "", sum_solar3$TimePeriod))
+
+#draw
+con_blue_solar <- plot_ly(x=sum_solar3$Month,y=sum_solar3$TimeStart,z=sum_solar3$sum_blue, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_solar3$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_solar3$TimeStart,title = "Start Hour"))
+
+con_oran_solar <- plot_ly(x=sum_solar3$Month,y=sum_solar3$TimeStart,z=sum_solar3$sum_oran, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_solar3$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_solar3$TimeStart,title = "Start Hour"))
+
+
+# --------------------------
+# red
+mon_solar6 <- solar6 %>%
+  group_by(mon,six_tag) %>%
+  summarise(sum_red = sum(red),red_ratio = sum_red/n(),.groups = 'drop')
+
+months <- rep(1:12, each = 8)
+time_periods <- c("5-10", "11-16", "17-22", "23-4")
+
+# Creating data tables for 6 hour sum
+sum_solar6 <- data.frame(
+  Month = months,
+  TimePeriod = rep(time_periods, 12)
+)
+sum_solar6 <- left_join(sum_solar6,mon_solar6,by = c("Month"="mon","TimePeriod"="six_tag"))
+sum_solar6$TimeStart <- as.numeric(sub("-.*", "", sum_solar6$TimePeriod))
+
+#draw
+con_red_solar <- plot_ly(x=sum_solar6$Month,y=sum_solar6$TimeStart,z=sum_solar6$sum_red, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_solar6$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_solar6$TimeStart,title = "Start Hour"))
+```
+
+
+
+```{r}
+# Calculate the occurrence of extreme events in each month for each time period and draw Contour plots
+mon_wind3 <- wind3 %>%
+  group_by(mon,three_tag) %>%
+  summarise(sum_blue = sum(blue), sum_oran=sum(oran), blue_ratio = sum_blue/n(), oran_ratio = sum_oran/n(),.groups = 'drop')
+
+months <- rep(1:12, each = 8)
+time_periods <- c("8-10", "11-13", "14-16", "17-19", "20-22", "23-1", "2-4", "5-7")
+# Creaate data frame for wind 3 hour
+sum_wind3 <- data.frame(
+  Month = months,
+  TimePeriod = rep(time_periods, 12)
+)
+sum_wind3 <- left_join(sum_wind3,mon_wind3,by = c("Month"="mon","TimePeriod"="three_tag"))
+sum_wind3$TimeStart <- as.numeric(sub("-.*", "", sum_wind3$TimePeriod))
+
+#draw
+con_blue_wind <- plot_ly(x=sum_wind3$Month,y=sum_wind3$TimeStart,z=sum_wind3$sum_blue, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_wind3$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_wind3$TimeStart,title = "Start Hour"))
+
+con_oran_wind <- plot_ly(x=sum_wind3$Month,y=sum_wind3$TimeStart,z=sum_wind3$sum_oran, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_wind3$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_wind3$TimeStart,title = "Start Hour"))
+
+# --------------------------
+# red
+mon_wind6 <- wind6 %>%
+  group_by(mon,six_tag) %>%
+  summarise(sum_red = sum(red),red_ratio = sum_red/n(),.groups = 'drop')
+
+months <- rep(1:12, each = 8)
+time_periods <- c("5-10", "11-16", "17-22", "23-4")
+# Create data frame for wind 6 hour
+sum_wind6 <- data.frame(
+  Month = months,
+  TimePeriod = rep(time_periods, 12)
+)
+sum_wind6 <- left_join(sum_wind6,mon_wind6,by = c("Month"="mon","TimePeriod"="six_tag"))
+sum_wind6$TimeStart <- as.numeric(sub("-.*", "", sum_wind6$TimePeriod))
+
+#draw
+con_red_wind <- plot_ly(x=sum_wind6$Month,y=sum_wind6$TimeStart,z=sum_wind6$sum_red, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_wind6$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_wind6$TimeStart,title = "Start Hour"))
+con_red_wind
+```
+
+
+```{r}
+fig <- subplot(con_blue_solar,con_blue_wind,
+               con_oran_solar,con_oran_wind,
+               con_red_solar,con_red_wind,
+               nrows = 3)
+fig
+```
+
+
+
+```{r}
+# Contour plot of composite extreme events
+so_win_3$mon <- month(so_win_3$adj_date)
+so_win_6$mon <- month(so_win_6$adj_date)
+
+mon_so_win_3 <- so_win_3 %>%
+  group_by(mon,three_tag) %>%
+  summarise(sum_blue = sum(blue), sum_oran=sum(oran), blue_ratio = sum_blue/n(), oran_ratio = sum_oran/n(),.groups = 'drop')
+
+months <- rep(1:12, each = 8)
+time_periods <- c("8-10", "11-13", "14-16", "17-19", "20-22", "23-1", "2-4", "5-7")
+
+sum_so_win_3 <- data.frame(
+  Month = months,
+  TimePeriod = rep(time_periods, 12)
+)
+sum_so_win_3 <- left_join(sum_so_win_3,mon_so_win_3,by = c("Month"="mon","TimePeriod"="three_tag"))
+sum_so_win_3$TimeStart <- as.numeric(sub("-.*", "", sum_so_win_3$TimePeriod))
+
+#draw
+con_blue_so_win <- plot_ly(x=sum_so_win_3$Month,y=sum_so_win_3$TimeStart,z=sum_so_win_3$sum_blue, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_so_win_3$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_so_win_3$TimeStart,title = "Start Hour"))
+
+con_oran_so_win <- plot_ly(x=sum_so_win_3$Month,y=sum_so_win_3$TimeStart,z=sum_so_win_3$sum_oran, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_so_win_3$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_so_win_3$TimeStart,title = "Start Hour"))
+
+# --------------------------
+# red
+mon_so_win_6 <- so_win_6 %>%
+  group_by(mon,six_tag) %>%
+  summarise(sum_red = sum(red),red_ratio = sum_red/n(),.groups = 'drop')
+
+months <- rep(1:12, each = 8)
+time_periods <- c("5-10", "11-16", "17-22", "23-4")
+
+sum_so_win_6 <- data.frame(
+  Month = months,
+  TimePeriod = rep(time_periods, 12)
+)
+sum_so_win_6 <- left_join(sum_so_win_6,mon_so_win_6,by = c("Month"="mon","TimePeriod"="six_tag"))
+sum_so_win_6$TimeStart <- as.numeric(sub("-.*", "", sum_so_win_6$TimePeriod))
+
+#draw
+con_red_so_win <- plot_ly(x=sum_so_win_6$Month,y=sum_so_win_6$TimeStart,z=sum_so_win_6$sum_red, type = "contour") %>%
+  layout(xaxis = list(tickmode = "array", tickvals = sum_so_win_6$Month, title = "Month"),
+         yaxis = list(tickmode = "array", tickvals = sum_so_win_6$TimeStart,title = "Start Hour"))
+
+
+
+fig <- subplot(con_blue_so_win,
+               con_oran_so_win,
+               con_red_so_win,
+               nrows = 3)
+fig
+```
+
+
+```{r}
+corre <- cor(blue_co_wind)
+b1 <- corre[upper.tri(corre, diag = FALSE)]
+corre <- cor(oran_co_wind)
+o1 <- corre[upper.tri(corre, diag = FALSE)]
+corre <- cor(red_co_wind)
+r1 <- corre[upper.tri(corre, diag = FALSE)]
+
+
+blue <- c(b1)
+oran <- c(o1)
+red <- c(r1)
+
+co <- data.frame(
+  name = c("Blue","Orange","Red"),
+  value = c(blue,oran,red)
+)
+
+png(filename = "correvalue_violinplot.png", width = 1000, height = 800)
+ggplot(co,aes(x=name, y=value, fill=name)) +
+  geom_violin(width=1) +
+  geom_boxplot(width=0.1, color="black") +
+  theme_classic()+
+  scale_fill_manual(values = c("lightblue", "yellow", "pink")) +
+  theme(text = element_text(size = 50)) +
+  ylim(-0.5,1)+
+  xlab("")
+
+dev.off()
+```

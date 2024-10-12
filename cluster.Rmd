@@ -1,0 +1,524 @@
+---
+title: "cluster_prov"
+author: "Qingyuan"
+date: "2023-06-30"
+output: html_document
+---
+
+```{r}
+library(readxl)
+library(xlsx)
+library(dplyr)
+library(zoo)
+library(factoextra)
+library(cluster)
+library(corrplot)
+library(plotly)
+library(lubridate)
+library(tidyr)
+```
+
+```{r}
+for(df_name in c("blue_co_solar","oran_co_solar","red_co_solar","blue_co_wind","oran_co_wind","red_co_wind")){
+  df_name <- paste0(df_name,".RData")
+  load(df_name)
+}
+```
+
+
+```{r}
+# delete rows with all zero
+for(df_name in c("blue_co_solar","oran_co_solar","red_co_solar","blue_co_wind","oran_co_wind","red_co_wind")){
+  df <- get(df_name)
+  df <- df[rowSums(df != 0) > 0,]
+  assign(paste0("nozero_",df_name),df)
+  rm(df)
+}
+```
+
+
+
+```{r}
+for(df_name in c("blue_co_wind","oran_co_wind","red_co_wind")){
+  co_df <- get(df_name)
+  df <- as.data.frame(t(co_df))
+  df <- df[, colSums(df != 0) > 0]
+  
+  dis_df <- dist(df, method = 'euclidean')
+  
+  set.seed(240)
+  Hierar_cl <- hclust(dis_df, method = "median")
+  
+  png(filename = paste0(df_name,"_hcluster",".png"), width = 1200, height = 1000)
+  plot(Hierar_cl)
+  dev.off()
+}
+```
+
+
+```{r}
+for(df_name in c("blue_co_solar","oran_co_solar","red_co_solar")){
+  co_df <- get(df_name)
+  df <- as.data.frame(t(co_df))
+  #df <- df[, colSums(df != 0) > 0] 
+  dis_df <- dist(df, method = 'euclidean')
+  set.seed(240)
+  Hierar_cl <- hclust(dis_df, method = "ward.D")
+  png(filename = paste0(df_name,"_hcluster",".png"), width = 1000, height = 800)
+  plot(Hierar_cl)
+  dev.off()
+}
+```
+
+
+```{r}
+# k-means
+i = "nozero_blue_co_wind"
+co_df <- get(i)
+df <- as.data.frame(t(co_df))
+df <- df[, colSums(df != 0) > 0]
+
+kmean <- kmeans(df, 5, algorithm="MacQueen")
+kmean$cluster
+fviz_cluster(kmean, data = df)
+#save(df, file="June_new_res\\df_for_cluster.RData")
+#write.csv(df, file="df_for_cluster.csv")
+
+
+```
+
+```{r}
+# use correlation matrix for cluster
+library(dplyr)
+
+calculate_correlation <- function(data, province1, province2) {
+  # Select the two provinces and remove the rows containing 0's
+  province_data <- data %>%
+    select(province1, province2) %>%
+    filter_all(any_vars(. != 0))
+  # Calculate the correlation coefficient
+  correlation <- cor(province_data[[province1]], province_data[[province2]])
+  return(correlation)
+}
+
+for(co_name in c("blue_co_solar","oran_co_solar","red_co_solar","blue_co_wind","oran_co_wind","red_co_wind")){
+  out_name <- paste0("mat_",co_name)
+  # Create an empty correlation matrix
+  co_name <- get(co_name)
+  num_provinces <- ncol(co_name)
+  correlation_matrix <- matrix(NA, nrow = num_provinces, ncol = num_provinces)
+  colnames(correlation_matrix) <- colnames(co_name)
+  rownames(correlation_matrix) <- colnames(co_name)
+  
+  # Calculate the correlation for every two provinces
+  for (i in 1:num_provinces) {
+    for (j in 1:num_provinces) {
+      if (i != j) {
+        province1 <- names(co_name)[i]
+        province2 <- names(co_name)[j]
+        correlation <- calculate_correlation(co_name, province1, province2)
+        correlation_matrix[i, j] <- correlation
+      }
+      if (i == j) {
+        correlation_matrix[i, j] <- 1
+      }
+    }
+  }
+  assign(out_name,correlation_matrix)
+  print("done")
+}
+
+i = "mat_red_co_solar"
+correlation_matrix <- get(i)
+
+set.seed(245)
+png(filename = paste0("h_",i,".png"), width = 800, height = 600)
+corre <- as.dist(1-correlation_matrix)
+Hierar_cl <- hclust(corre, method = "ward.D2")
+plot(Hierar_cl)
+
+png(filename = paste0(i,".png"), width = 1200, height = 1200)
+corrplot(correlation_matrix,
+         method = "shade", # Correlation plot method
+         order = "hclust",
+         hclust.method = "ward.D2",
+         addrect = 5,              # If order = "hclust", number of cluster rectangles
+         rect.col = 2,             # Color of the rectangles
+         rect.lwd = 4,
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "black", # Labels color
+         bg = "white",     # Background color
+         #title = df_name,       # Main title
+         col = NULL,       # Color palette
+         number.cex = 1.3, tl.cex = 2,
+         addCoef.col = "black",
+         cl.pos = 'n')
+dev.off()
+```
+
+
+```{r}
+# all hours
+for(df_name in c("blue_co_solar","oran_co_solar","red_co_solar","blue_co_wind","oran_co_wind","red_co_wind")){
+  df <- get(df_name)
+  corre <- cor(df)
+  corre_dis <- as.dist(1-corre)
+  Hierar_cl <- hclust(corre_dis, method = "ward.D2")
+  png(filename = paste0("ch\\",df_name,".png"), width = 800, height = 600)
+  plot(Hierar_cl)
+  dev.off()
+} 
+```
+
+```{r}
+# solar-wind cluster
+for(df_name in c("blue_co_sowin","oran_co_sowin","red_co_sowin")){
+  df <- get(df_name)
+  df = df[,apply(df, 2, function(x) sd(x)!=0)] 
+  corre <- cor(df)
+  corre_dis <- as.dist(1-corre)
+  Hierar_cl <- hclust(corre_dis, method = "ward.D2")
+  png(filename = paste0("ch\\",df_name,".png"), width = 800, height = 600)
+  plot(Hierar_cl)
+  dev.off()
+}
+```
+
+
+```{r}
+mapping <- c(
+  "Beijing" = "BJ",
+  "Fujian" = "FJ",
+  "Gansu" = "GS",
+  "Guangdong" = "GD",
+  "Guangxi" = "GX",
+  "Guizhou" = "GZ",
+  "Hainan" = "HI",
+  "Hebei" = "HE",
+  "Heilongjiang" = "HL",
+  "Henan" = "HA",
+  "InnerMongoliaEast" = "IME",
+  "InnerMongoliaWest" = "IMW",
+  "Jiangsu" = "JS",
+  "Jilin" = "JL",
+  "Liaoning" = "LN",
+  "Ningxia" = "NX",
+  "Qinghai" = "QH",
+  "Shaanxi" = "SN",
+  "Shandong" = "SD",
+  "Shanxi" = "SX",
+  "Shanghai" = "SH",
+  "Sichuan" = "SC",
+  "Tianjin" = "TJ",
+  "Tibet" = "XZ",
+  "Xinjiang" = "XJ",
+  "Yunnan" = "YN",
+  "Zhejiang" = "ZJ"
+)
+
+mapping[colnames(blue_co_solar)]
+
+
+# --- correlation plot ---
+png(filename = "ch//corrplot.png", width = 24000, height = 16000)
+par(mfrow = c(2, 3))
+#solar
+cluster_number <- c(7,7,6,7,7,4)
+number_tag = 0
+for(df_name in c("blue_co_solar","oran_co_solar","red_co_solar")){
+  data <- get(df_name)
+
+  colnames(data) <- mapping[colnames(data)]
+  number_tag = number_tag + 1
+  corre <- cor(data)
+  corrplot(corre,
+         method = "shade", # Correlation plot method
+         order = "hclust",
+         hclust.method = "ward.D2",
+         addrect = cluster_number[number_tag],# If order = "hclust", number of cluster rectangles
+         rect.col = 2,             # Color of the rectangles
+         rect.lwd = 40,
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "black", # Labels color
+         bg = "white",     # Background color
+         #title = df_name,       # Main title
+         col = NULL,       # Color palette
+         number.cex = 13, tl.cex = 20,
+         addCoef.col = "black",
+         cl.pos = 'n')
+}
+# wind
+for(df_name in c("blue_co_wind","oran_co_wind","red_co_wind")){
+  data <- get(df_name)
+  colnames(data) <- mapping[colnames(data)]
+  number_tag = number_tag + 1
+  corre <- cor(data)
+  corrplot(corre,
+         method = "shade", # Correlation plot method
+         order = "hclust",
+         hclust.method = "ward.D",
+         addrect = cluster_number[number_tag],# If order = "hclust", number of cluster rectangles
+         rect.col = 2,             # Color of the rectangles
+         rect.lwd = 40,
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "black", # Labels color
+         bg = "white",     # Background color
+         #title = df_name,       # Main title
+         col = NULL,       # Color palette
+         number.cex = 13, tl.cex = 20,
+         addCoef.col = "black",
+         cl.pos = 'n')
+}
+#colorlegend(xlim=c(5,15), ylim=c(10,15), scalebluered, c(seq(-1,1,.25)), align="l", vertical=TRUE, addlabels=TRUE)
+dev.off()
+```
+
+
+```{r}
+mapping <- c(
+  "Beijing" = "BJ",
+  "Fujian" = "FJ",
+  "Gansu" = "GS",
+  "Guangdong" = "GD",
+  "Guangxi" = "GX",
+  "Guizhou" = "GZ",
+  "Hainan" = "HI",
+  "Hebei" = "HE",
+  "Heilongjiang" = "HL",
+  "Henan" = "HA",
+  "InnerMongoliaEast" = "IME",
+  "InnerMongoliaWest" = "IMW",
+  "Jiangsu" = "JS",
+  "Jilin" = "JL",
+  "Liaoning" = "LN",
+  "Ningxia" = "NX",
+  "Qinghai" = "QH",
+  "Shaanxi" = "SN",
+  "Shandong" = "SD",
+  "Shanxi" = "SX",
+  "Shanghai" = "SH",
+  "Sichuan" = "SC",
+  "Tianjin" = "TJ",
+  "Tibet" = "XZ",
+  "Xinjiang" = "XJ",
+  "Yunnan" = "YN",
+  "Zhejiang" = "ZJ"
+)
+
+mapping[colnames(blue_co_solar)]
+
+mycol <- colorRampPalette(c("#F5CC16","white", "green4"), alpha = TRUE)
+
+# --- correlation plot ---
+png(filename = "ch//corrplot_SI.png", width = 20000, height = 26000)
+par(mfrow = c(3, 2))
+#solar
+cluster_number <- c(7,7,7,7,5,6)
+title_name <- c("(A) Wind blue droughts","(D) Solar blue droughts","(B) Wind orange droughts","(E) Solar orange droughts","(C) Wind red droughts","(F) Solar red droughts")
+
+number_tag = 0
+for(df_name in c("blue_co_wind","blue_co_solar","oran_co_wind","oran_co_solar","red_co_wind","red_co_solar")){
+  data <- get(df_name)
+  colnames(data) <- mapping[colnames(data)]
+  number_tag = number_tag + 1
+  corre <- cor(data)
+  corrplot(corre,
+         method = "color", # Correlation plot method
+         order = "hclust",
+         hclust.method = "ward.D2",
+         addrect = cluster_number[number_tag],# If order = "hclust", number of cluster rectangles
+         rect.col = 2,             # Color of the rectangles
+         rect.lwd = 30,
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "white", # Labels color
+         bg = "green4",     # Background color
+         title = title_name[number_tag],       # Main title
+         mar = c(10,10,20,10),
+         col = mycol(100),
+#         col = NULL,       # Color palette
+         number.cex = 18, 
+         cl.cex = 22, tl.cex = 22, cex.main = 28,
+#         addCoef.col = "black",
+         cl.pos = 'r',
+         addgrid.col= 'grey', 
+         tl.pos = 'd' #Display text labels only on the diagonal
+         )
+  }
+
+#colorlegend(xlim=c(5,15), ylim=c(10,15), scalebluered, c(seq(-1,1,.25)), align="l", vertical=TRUE, addlabels=TRUE)
+dev.off()
+```
+
+
+
+```{r}
+mycol <- colorRampPalette(c("#F5CC16","white", "green4"), alpha = TRUE)
+
+# --- correlation plot ---
+png(filename = "ch//corrplot_Manuscript.png", width = 20000, height = 26000)
+par(mfrow = c(2, 1))
+
+cluster_number <- c(7,7)
+title_name <- c("(A) Wind blue droughts","(B) Solar blue droughts")
+
+number_tag = 0
+for(df_name in c("blue_co_wind","blue_co_solar")){
+  data <- get(df_name)
+  number_tag = number_tag + 1
+  corre <- cor(data)
+  corrplot(corre,
+         method = "color", # Correlation plot method
+         order = "hclust",
+         hclust.method = "ward.D2",
+         addrect = cluster_number[number_tag],# If order = "hclust", number of cluster rectangles
+         rect.col = 2,             # Color of the rectangles
+         rect.lwd = 30,
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "black", # Labels color
+         bg = "green4",     # Background color
+         title = title_name[number_tag],       # Main title
+         mar = c(10,10,20,10),
+         col = mycol(100),
+#         col = NULL,       # Color palette
+         number.cex = 12, 
+         cl.cex = 24, tl.cex = 24, cex.main = 28,
+         addCoef.col = "black",
+         cl.pos = 'r',
+#         addgrid.col= 'black', 
+#         tl.pos = 'd'
+         tl.pos = 'lt', 
+         tl.srt  = 40        )
+  }
+
+#colorlegend(xlim=c(5,15), ylim=c(10,15), scalebluered, c(seq(-1,1,.25)), align="l", vertical=TRUE, addlabels=TRUE)
+dev.off()
+```
+
+
+```{r}
+load("sowin.RData")
+provinces <- unique(sowin$province)
+blue_co_sowin <- data.frame(matrix(nrow = 166552, ncol = length(provinces)))
+colnames(blue_co_sowin) <- provinces
+for (province in provinces) {
+  province_data <- sowin$blue[sowin$province == province]
+  blue_co_sowin[[province]] <- province_data
+}
+
+oran_co_sowin <- data.frame(matrix(nrow = 166552, ncol = length(provinces)))
+colnames(oran_co_sowin) <- provinces
+for (province in provinces) {
+  province_data <- sowin$oran[sowin$province == province]
+  oran_co_sowin[[province]] <- province_data
+}
+
+red_co_sowin <- data.frame(matrix(nrow = 166552, ncol = length(provinces)))
+colnames(red_co_sowin) <- provinces
+for (province in provinces) {
+  province_data <- sowin$red[sowin$province == province]
+  red_co_sowin[[province]] <- province_data
+}
+
+number_tag = 0
+cluster_number <-c(7,7,5)
+title_name <- c("(A) Blue droughts","(B) Orange droughts","(C) Red droughts")
+
+png(filename = "ch//Compound_corrplot_SI.png", width = 24000, height = 9000)
+par(mfrow = c(1, 3))
+
+for(df_name in c("blue_co_sowin","oran_co_sowin","red_co_sowin")){
+  data <- get(df_name)
+  data = data[,apply(data, 2, function(x) sd(x)!=0)]
+  colnames(data) <- mapping[colnames(data)]
+  number_tag = number_tag + 1
+  corre <- cor(data)
+  corrplot(corre,
+         method = "color", # Correlation plot method
+         order = "hclust",
+         hclust.method = "ward.D2",
+         addrect = cluster_number[number_tag],# If order = "hclust", number of cluster rectangles
+         rect.col = 2,             # Color of the rectangles
+         rect.lwd = 30,
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "white", # Labels color
+         bg = "green4",     # Background color
+         title = title_name[number_tag],       # Main title
+         mar = c(10,10,20,10),
+         col = mycol(100),
+         number.cex = 10, cl.cex = 13, tl.cex = 13, cex.main = 20,
+#         addCoef.col = "black",
+         cl.pos = 'b',
+         addgrid.col= 'grey', 
+         tl.pos = 'd'
+         )
+}
+#colorlegend(xlim=c(5,15), ylim=c(10,15), scalebluered, c(seq(-1,1,.25)), align="l", vertical=TRUE
+```
+
+
+
+```{r}
+load("sowin.RData")
+provinces <- unique(sowin$province)
+blue_co_sowin <- data.frame(matrix(nrow = 166552, ncol = length(provinces)))
+colnames(blue_co_sowin) <- provinces
+for (province in provinces) {
+  province_data <- sowin$blue[sowin$province == province]
+  blue_co_sowin[[province]] <- province_data
+}
+
+oran_co_sowin <- data.frame(matrix(nrow = 166552, ncol = length(provinces)))
+colnames(oran_co_sowin) <- provinces
+for (province in provinces) {
+  province_data <- sowin$oran[sowin$province == province]
+  oran_co_sowin[[province]] <- province_data
+}
+
+red_co_sowin <- data.frame(matrix(nrow = 166552, ncol = length(provinces)))
+colnames(red_co_sowin) <- provinces
+for (province in provinces) {
+  province_data <- sowin$red[sowin$province == province]
+  red_co_sowin[[province]] <- province_data
+}
+
+number_tag = 0
+
+png(filename = "ch//Compound_corrplot_Manucript.png", width = 15000, height = 13000)
+#par(mfrow = c(1, 1))
+
+for(df_name in c("blue_co_sowin")){
+  data <- get(df_name)
+  data = data[,apply(data, 2, function(x) sd(x)!=0)]
+  number_tag = number_tag + 1
+  corre <- cor(data)
+  corrplot(corre,
+         method = "color", # Correlation plot method
+         order = "hclust",
+         hclust.method = "ward.D2",
+         addrect = cluster_number[number_tag],# If order = "hclust", number of cluster rectangles
+         rect.col = 2,             # Color of the rectangles
+         rect.lwd = 30,
+         type = "full",    # Correlation plot style (also "upper" and "lower")
+         diag = TRUE,      # If TRUE (default), adds the diagonal
+         tl.col = "black", # Labels color
+         bg = "green4",     # Background color
+#         title = title_name[number_tag],       # Main title
+         mar = c(0,0,0,0),
+         col = mycol(100),
+         number.cex = 12, cl.cex = 18, tl.cex = 18, 
+#        cex.main = 28,
+         addCoef.col = "black",
+         cl.pos = 'r',
+         addgrid.col= 'grey', 
+#         tl.pos = 'd' 
+         tl.pos = 'lt', 
+         tl.srt  = 40        )
+}
+#colorlegend(xlim=c(5,15), ylim=c(10,15), scalebluered, c(seq(-1,1,.25)), align="l", vertical=TRUE
+```
